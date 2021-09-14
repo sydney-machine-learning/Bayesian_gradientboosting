@@ -5,18 +5,20 @@ import torch.nn as nn
 class EnsembleNet(object):
     def __init__(self, c0, lr):
         self.models = []
+        self.gammas = []
         self.c0 = c0
         self.lr = lr
 
-    def add(self, model):
+    def add(self, model, gamma):
         self.models.append(model)
+        self.gammas.append(gamma)
 
     def parameters(self):
         params = []
         for m in self.models:
             params.extend(m.parameters())
 
-        params.append(self.boost_rate)
+        params.extend(self.gammas)
         return params
 
     def zero_grad(self):
@@ -38,20 +40,12 @@ class EnsembleNet(object):
     def forward(self, x):
         prediction = self.c0
         with torch.no_grad():
-            for m in self.models:
-                prediction += m(x)
+            for m, g in zip(self.models, self.gammas):
+                prediction += g * m(x)
         return prediction
 
     def forward_grad(self, x):
-        if len(self.models) == 0:
-            return None, self.c0
-        # at least one model
-        middle_feat_cum = None
-        prediction = None
-        for m in self.models:
-            if middle_feat_cum is None:
-                middle_feat_cum, prediction = m(x, middle_feat_cum)
-            else:
-                middle_feat_cum, pred = m(x, middle_feat_cum)
-                prediction += pred
-        return middle_feat_cum, self.c0 + self.boost_rate * prediction
+        prediction = self.c0
+        for m, g in zip(self.models, self.gammas):
+            prediction += g * m(x)
+        return prediction
