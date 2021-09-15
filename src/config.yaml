@@ -1,6 +1,6 @@
 params:
   lr: 0.005
   num_nets: 3
-  data: "sunspot"
-  exps: 30
+  data: "ionosphere"
+  exps: 10
   cuda: true
