@@ -112,10 +112,14 @@ class Experiment:
 
     def init_classification(self):
         self.g_func = lambda y, yhat: -1 * (2 * y) / (1 + torch.exp(2 * y * yhat))
-        # self.g_func = lambda y, yhat: y - yhat
+        self.h_func = lambda y, yhat: (4 * torch.exp(2 * y * yhat)) / (
+            1 + torch.exp(2 * y * yhat) ** 2
+        )
 
-        # self.lambda_func = lambda y, fx, Fx: torch.sum(1 / fx * (y - Fx) / (Fx * (1 - Fx)))
-        self.lambda_func = lambda y, fx, Fx: 1
+        self.lambda_func = lambda y, fx, Fx: torch.mean(
+            -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
+        )
+        # self.lambda_func = lambda y, fx, Fx: 1
         self.loss_func = nn.MSELoss()
         self.acc_func = auc_score
 

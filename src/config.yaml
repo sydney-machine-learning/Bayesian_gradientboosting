@@ -2,5 +2,5 @@ params:
   lr: 0.005
   num_nets: 3
   data: "ionosphere"
-  exps: 10
+  exps: 30
   cuda: true
