@@ -1,6 +1,6 @@
 params:
   lr: 0.005
   num_nets: 3
-  data: "ionosphere"
+  data: "rossler"
   exps: 30
   cuda: true

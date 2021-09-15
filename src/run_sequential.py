@@ -30,6 +30,11 @@ def get_data(train_path, test_path, binary=False):
     if binary:
         train = LibTXTData(train_path, config)
         test = LibTXTData(test_path, config)
+
+        scaler = MinMaxScaler()
+        scaler.fit(train.feat)
+        train.feat = scaler.transform(train.feat)
+        test.feat = scaler.transform(test.feat)
     else:
         train = LibTXTData(train_path, config)
         test = LibTXTData(test_path, config)
@@ -43,8 +48,8 @@ def get_data(train_path, test_path, binary=False):
 
 
 def get_optim(params, lr):
-    optimizer = Adam(params, lr, weight_decay=0.0003)
-    # optimizer = SGD(params, lr, weight_decay=weight_decay)
+    optimizer = Adam(params, lr)
+    # optimizer = SGD(params, lr, weight_decay=0.0003)
     return optimizer
 
 
@@ -66,7 +71,6 @@ class Experiment:
             config.hidden_d = 10
             config.out_d = 1
         if config.data == "rossler":
-
             train_path = "datasets/Rossler/train.txt"
             test_path = "datasets/Rossler/test.txt"
 
@@ -74,7 +78,6 @@ class Experiment:
             config.hidden_d = 10
             config.out_d = 1
         if config.data == "ionosphere":
-
             train_path = "datasets/Ionosphere/train.txt"
             test_path = "datasets/Ionosphere/test.txt"
 
@@ -82,7 +85,6 @@ class Experiment:
             config.hidden_d = 50
             config.out_d = 1
         if config.data == "cancer":
-
             train_path = "datasets/Cancer/train.txt"
             test_path = "datasets/Cancer/test.txt"
 
@@ -119,7 +121,6 @@ class Experiment:
         self.lambda_func = lambda y, fx, Fx: torch.mean(
             -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
         )
-        # self.lambda_func = lambda y, fx, Fx: 1
         self.loss_func = nn.MSELoss()
         self.acc_func = auc_score
 
