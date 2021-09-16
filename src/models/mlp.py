@@ -8,9 +8,10 @@ class MLP_1HL(nn.Module):
         self.in_layer = nn.Linear(dim_in, dim_hidden)
         self.out_layer = nn.Linear(dim_hidden, dim_out)
         self.sigmoid = nn.Sigmoid()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        out = self.in_layer(x)
+        out = self.relu(self.in_layer(x))
         return self.out_layer(out).squeeze()
 
     @classmethod

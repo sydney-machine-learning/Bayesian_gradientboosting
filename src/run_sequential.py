@@ -1,4 +1,5 @@
 import time
+from multiprocessing import Value
 
 import numpy as np
 import torch
@@ -49,7 +50,7 @@ def get_data(train_path, test_path, binary=False):
 
 def get_optim(params, lr):
     optimizer = Adam(params, lr)
-    # optimizer = SGD(params, lr, weight_decay=0.0003)
+    # optimizer = SGD(params, lr)
     return optimizer
 
 
@@ -70,27 +71,29 @@ class Experiment:
             config.feat_d = 4
             config.hidden_d = 10
             config.out_d = 1
-        if config.data == "rossler":
+        elif config.data == "rossler":
             train_path = "datasets/Rossler/train.txt"
             test_path = "datasets/Rossler/test.txt"
 
             config.feat_d = 4
             config.hidden_d = 10
             config.out_d = 1
-        if config.data == "ionosphere":
+        elif config.data == "ionosphere":
             train_path = "datasets/Ionosphere/train.txt"
             test_path = "datasets/Ionosphere/test.txt"
 
             config.feat_d = 34
             config.hidden_d = 50
             config.out_d = 1
-        if config.data == "cancer":
+        elif config.data == "cancer":
             train_path = "datasets/Cancer/train.txt"
             test_path = "datasets/Cancer/test.txt"
 
             config.feat_d = 9
             config.hidden_d = 12
             config.out_d = 1
+        else:
+            raise ValueError("Invalid dataset specified")
 
         self.train, self.test = get_data(train_path, test_path, binary=binary)
 
@@ -127,6 +130,9 @@ class Experiment:
         self.c0 = init_gbnn(self.train)
 
     def run_experiment(self):
+        """
+        Runs the full experiment and prints out accuracy statistics after each stage (boosting level).
+        """
 
         for level in range(1, config.num_nets + 1):
 
@@ -159,6 +165,17 @@ class Experiment:
             print(f"Total elapsed time: {total_time}")
 
     def run(self, train, test, num_nets):
+        """
+        Run one instance of the experiment
+
+        Args:
+            train (list): Train data
+            test (list): Test data
+            num_nets (int): Number of weak learners to train
+
+        Returns:
+            final_tr_score (float), final_te_score (float): Training and test scores after ensemble is fully trained
+        """
         model_type = MLP_1HL
 
         net_ensemble = EnsembleNet(self.c0, config.lr)

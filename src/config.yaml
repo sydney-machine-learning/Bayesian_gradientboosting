@@ -1,6 +1,6 @@
 params:
   lr: 0.005
-  num_nets: 3
-  data: "rossler"
+  num_nets: 5
+  data: "cancer"
   exps: 30
   cuda: true
