@@ -3,23 +3,28 @@ import torch
 from sklearn.metrics import mean_squared_error
 
 
-def root_mse(net_ensemble, loader, cuda=True):
+def root_mse(net_ensemble, data, cuda=True):
     loss = 0
     total = 0
 
-    for x, y in loader:
+    for x, y in data:
+
+        if np.isscalar(y):
+            out_shape = 1
+        else:
+            out_shape = y.shape[0]
 
         if cuda:
-            x = x.cuda()
+            x = torch.as_tensor(x, dtype=torch.float32).cuda()
 
         with torch.no_grad():
             out = net_ensemble.forward(x)
 
-        y = y.cpu().numpy().reshape(len(y), 1)
+        y = y.reshape(out_shape, 1)
+        out = out.cpu().numpy().reshape(out_shape, 1)
 
-        out = out.cpu().numpy().reshape(len(y), 1)
-        loss += mean_squared_error(y, out) * len(y)
-        total += len(y)
+        loss += mean_squared_error(y, out)
+        total += 1
     return np.sqrt(loss / total)
 
 

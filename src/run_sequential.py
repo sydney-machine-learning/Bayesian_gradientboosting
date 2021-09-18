@@ -1,3 +1,4 @@
+import math
 import time
 from multiprocessing import Value
 
@@ -8,7 +9,7 @@ import yaml
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.optim import SGD, Adam
 
-from data.data import LibTXTData
+from data.data import LibCSVData, LibTXTData
 from data.sparseloader import DataLoader
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL, MLP_2HL
@@ -26,19 +27,27 @@ class Config:
 config = Config(**data["params"])
 
 
-def get_data(train_path, test_path, binary=False):
+def get_data(train_path, test_path, multistep=False, binary=False):
 
     if binary:
-        train = LibTXTData(train_path, config)
-        test = LibTXTData(test_path, config)
+        if multistep:
+            train = LibCSVData(train_path + "train1.csv", config)
+            test = LibCSVData(test_path + "test1.csv", config)
+        else:
+            train = LibTXTData(train_path + "train.txt", config)
+            test = LibTXTData(test_path + "test.txt", config)
 
         scaler = MinMaxScaler()
         scaler.fit(train.feat)
         train.feat = scaler.transform(train.feat)
         test.feat = scaler.transform(test.feat)
     else:
-        train = LibTXTData(train_path, config)
-        test = LibTXTData(test_path, config)
+        if multistep:
+            train = LibCSVData(train_path + "train1.csv", config)
+            test = LibCSVData(test_path + "test1.csv", config)
+        else:
+            train = LibTXTData(train_path + "train.txt", config)
+            test = LibTXTData(test_path + "test.txt", config)
 
         scaler = StandardScaler()
         scaler.fit(train.feat)
@@ -65,53 +74,91 @@ class Experiment:
 
     def load_data(self, binary=False):
         if config.data == "sunspot":
-            train_path = "datasets/Sunspot/train.txt"
-            test_path = "datasets/Sunspot/test.txt"
+            train_path = "datasets/Sunspot/"
+            test_path = "datasets/Sunspot/"
 
-            config.feat_d = 4
             config.hidden_d = 10
-            config.out_d = 1
         elif config.data == "rossler":
-            train_path = "datasets/Rossler/train.txt"
-            test_path = "datasets/Rossler/test.txt"
+            train_path = "datasets/Rossler/"
+            test_path = "datasets/Rossler/"
 
-            config.feat_d = 4
             config.hidden_d = 10
-            config.out_d = 1
         elif config.data == "ionosphere":
-            train_path = "datasets/Ionosphere/train.txt"
-            test_path = "datasets/Ionosphere/test.txt"
+            train_path = "datasets/Ionosphere/"
+            test_path = "datasets/Ionosphere/"
 
             config.feat_d = 34
             config.hidden_d = 50
-            config.out_d = 1
         elif config.data == "cancer":
-            train_path = "datasets/Cancer/train.txt"
-            test_path = "datasets/Cancer/test.txt"
+            train_path = "datasets/Cancer/"
+            test_path = "datasets/Cancer/"
 
             config.feat_d = 9
             config.hidden_d = 12
-            config.out_d = 1
         else:
             raise ValueError("Invalid dataset specified")
 
-        self.train, self.test = get_data(train_path, test_path, binary=binary)
+        self.train, self.test = get_data(
+            train_path, test_path, multistep=self.config.multistep, binary=binary
+        )
 
     def init_experiment(self):
         if self.config.data in ["sunspot", "rossler"]:  # Regression problems
+            if self.config.multistep:
+                self.config.feat_d = 5
+                self.config.out_d = 10
+            else:
+                self.config.feat_d = 4
+                self.config.out_d = 1
+
             self.load_data()
             self.init_regression()
             self.config.classification = False
-        elif self.config.data in ["ionosphere", "cancer"]:  # Classification problems
+        elif self.config.data in ["ionosphere", "cancer"]:  # Classification problem
+            self.config.out_d = 1
+
             self.load_data(binary=True)
             self.init_classification()
             self.config.classification = True
+        else:
+            raise ValueError("Invalid dataset specified")
+
+    def log_likelihood_timeseries(self, model, data, w, tau_sq):
+
+        x, y = data.feat, data.label
+
+        fx = model.evaluate_proposal(x, w)
+
+        if y.ndims > 1:
+            n = (
+                y.shape[0] * y.shape[1]
+            )  # number of samples x number of outputs (prediction horizon)
+        else:
+            n = y.shape[0]
+
+        p1 = -(n / 2) * np.log(2 * math.pi * tau_sq)
+        p2 = 1 / 2 * tau_sq
+
+        result = p1 - (p2 * np.sum(np.square(y - fx)))
+
+        return result
+
+    def prior_likelihood_timeseries(self, sigma_squared, nu_1, nu_2, w, tausq):
+        h = self.config.hidden_d  # number hidden neurons
+        d = self.config.feat_d  # number input neurons
+        part1 = -1 * ((d * h + h + 2) / 2) * np.log(sigma_squared)
+        part2 = 1 / (2 * sigma_squared) * (sum(np.square(w)))
+        log_loss = part1 - part2 - (1 + nu_1) * np.log(tausq) - (nu_2 / tausq)
+        return log_loss
 
     def init_regression(self):
         self.g_func = lambda y, yhat: 2 * (yhat - y)
         self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx)) / torch.sum(fx * fx)
         self.loss_func = nn.MSELoss()
         self.acc_func = root_mse
+
+        self.log_likelihood_func = self.log_likelihood_timeseries
+        self.prior_func = self.prior_likelihood_timeseries
 
         self.c0 = np.mean(self.train.label)
 
@@ -164,6 +211,33 @@ class Experiment:
                 )
             print(f"Total elapsed time: {total_time}")
 
+    def train_mcmc(self, net_ensemble, model, train_data):
+
+        x, y = train_data.feat, train_data.label
+        if config.cuda:
+            x = x.cuda
+
+    def train_backprop(self, net_ensemble, model, train_data):
+        optimizer = get_optim(model.parameters(), config.lr)
+        net_ensemble.to_train()  # Set the models in ensemble net to train mode
+
+        for i, (x, y) in enumerate(train_data):
+            if config.cuda:
+                x = torch.as_tensor(x, dtype=torch.float32).cuda()
+                y = torch.as_tensor(y, dtype=torch.float32).cuda()
+            out = net_ensemble.forward(x)
+            # out = torch.as_tensor(out, dtype=torch.float32).cuda()
+
+            grad_direction = -1 * self.g_func(y, out)
+
+            out = model(x)
+            out = torch.as_tensor(out, dtype=torch.float32).cuda()
+            loss = self.loss_func(out, grad_direction)
+
+            model.zero_grad()
+            loss.backward()
+            optimizer.step()
+
     def run(self, train, test, num_nets):
         """
         Run one instance of the experiment
@@ -180,8 +254,9 @@ class Experiment:
 
         net_ensemble = EnsembleNet(self.c0, config.lr)
 
-        train_loader = DataLoader(train, 1, shuffle=True, drop_last=False, num_workers=2)
-        test_loader = DataLoader(test, 1, shuffle=False, drop_last=False, num_workers=2)
+        train.shuffle()
+        # train_loader = DataLoader(train, 1, shuffle=True, drop_last=False, num_workers=2)
+        # test_loader = DataLoader(test, 1, shuffle=False, drop_last=False, num_workers=2)
 
         final_tr_score = 0
         final_te_score = 0
@@ -191,30 +266,14 @@ class Experiment:
             if config.cuda:
                 model.cuda()
 
-            optimizer = get_optim(model.parameters(), config.lr)
-            net_ensemble.to_train()  # Set the models in ensemble net to train mode
-
-            for i, (x, y) in enumerate(train_loader):
-
-                if config.cuda:
-                    x = x.cuda()
-                    y = torch.as_tensor(y, dtype=torch.float32).cuda().view(-1, 1)
-                out = net_ensemble.forward(x)
-                out = torch.as_tensor(out, dtype=torch.float32).cuda().view(-1, 1)
-
-                grad_direction = -1 * self.g_func(y, out)
-
-                out = model(x)
-                out = torch.as_tensor(out, dtype=torch.float32).cuda().view(-1, 1)
-                loss = self.loss_func(out, grad_direction)
-
-                model.zero_grad()
-                loss.backward()
-                optimizer.step()
+            if config.mcmc:
+                self.train_mcmc(net_ensemble, model, train)
+            else:
+                self.train_backprop(net_ensemble, model, train)
 
             # Calculate gamma
-            x = torch.tensor(train.feat).cuda()
-            y = torch.tensor(train.label).cuda()
+            x = torch.tensor(train.feat, dtype=torch.float32).cuda()
+            y = torch.tensor(train.label, dtype=torch.float32).cuda()
 
             gamma = self.lambda_func(y, model(x), net_ensemble.forward(x))
 
@@ -225,9 +284,9 @@ class Experiment:
             net_ensemble.to_eval()  # Set the models in ensemble net to eval mode
 
             # Train
-            final_tr_score = self.acc_func(net_ensemble, train_loader)
+            final_tr_score = self.acc_func(net_ensemble, train)
 
-            final_te_score = self.acc_func(net_ensemble, test_loader)
+            final_te_score = self.acc_func(net_ensemble, test)
 
             # print(
             #     f"Stage: {stage}  RMSE@Tr: {tr_rmse:.5f}, RMSE@Val: {val_rmse:.5f}, RMSE@Te: {te_rmse:.5f}"

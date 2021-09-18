@@ -1,6 +1,8 @@
 params:
   lr: 0.005
   num_nets: 5
-  data: "cancer"
+  data: "sunspot"
   exps: 30
   cuda: true
+  multistep: false
+  mcmc: false

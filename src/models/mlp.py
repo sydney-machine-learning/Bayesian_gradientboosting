@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 
@@ -13,6 +15,36 @@ class MLP_1HL(nn.Module):
     def forward(self, x):
         out = self.relu(self.in_layer(x))
         return self.out_layer(out).squeeze()
+
+    def evaluate_proposal(self, x, w):
+        with torch.no_grad():
+
+            # Set weights
+            self.decode(w)
+
+            return self.forward(x)
+
+    def decode(self, w):
+
+        in_weight, in_bias, out_weight, out_bias = w
+        new_state_dict = OrderedDict(
+            {
+                "in_layer.weight": in_weight,
+                "in_layer.bias": in_bias,
+                "out_layer.weight": out_weight,
+                "out_layer.bias": out_bias,
+            }
+        )
+        self.load_state_dict(new_state_dict, strict=False)
+
+    def encode(self):
+        state_dict = self.state_dict()
+        return [
+            state_dict["in_layer.weight"],
+            state_dict["in_layer.bias"],
+            state_dict["out_layer.weight"],
+            state_dict["out_layer.bias"],
+        ]
 
     @classmethod
     def get_model(cls, config):
