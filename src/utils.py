@@ -33,7 +33,7 @@ def auc_score(net_ensemble, test_loader, cuda=True):
     posterior = []
     for x, y in test_loader:
         if cuda:
-            x = x.cuda()
+            x = torch.as_tensor(x, dtype=torch.float32).cuda()
         with torch.no_grad():
             out = net_ensemble.forward(x)
         prob = 1.0 - 1.0 / torch.exp(

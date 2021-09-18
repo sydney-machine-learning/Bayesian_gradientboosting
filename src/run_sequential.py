@@ -10,7 +10,6 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.optim import SGD, Adam
 
 from data.data import LibCSVData, LibTXTData
-from data.sparseloader import DataLoader
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL, MLP_2HL
 from utils import auc_score, init_gbnn, root_mse
