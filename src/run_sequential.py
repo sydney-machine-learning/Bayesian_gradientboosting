@@ -1,4 +1,5 @@
 import math
+import random
 import time
 from multiprocessing import Value
 
@@ -122,13 +123,11 @@ class Experiment:
         else:
             raise ValueError("Invalid dataset specified")
 
-    def log_likelihood_timeseries(self, model, data, w, tau_sq):
-
-        x, y = data.feat, data.label
+    def log_likelihood_timeseries(self, model, x, y, w, tau_sq):
 
         fx = model.evaluate_proposal(x, w)
 
-        if y.ndims > 1:
+        if y.ndim > 1:
             n = (
                 y.shape[0] * y.shape[1]
             )  # number of samples x number of outputs (prediction horizon)
@@ -138,7 +137,7 @@ class Experiment:
         p1 = -(n / 2) * np.log(2 * math.pi * tau_sq)
         p2 = 1 / 2 * tau_sq
 
-        result = p1 - (p2 * np.sum(np.square(y - fx)))
+        result = p1 - (p2 * np.sum(np.square((y - fx).cpu().numpy())))
 
         return result
 
@@ -146,8 +145,10 @@ class Experiment:
         h = self.config.hidden_d  # number hidden neurons
         d = self.config.feat_d  # number input neurons
         part1 = -1 * ((d * h + h + 2) / 2) * np.log(sigma_squared)
-        part2 = 1 / (2 * sigma_squared) * (sum(np.square(w)))
+        part2 = 1 / (2 * sigma_squared) * (np.sum(np.square(w)))
+
         log_loss = part1 - part2 - (1 + nu_1) * np.log(tausq) - (nu_2 / tausq)
+
         return log_loss
 
     def init_regression(self):
@@ -214,7 +215,79 @@ class Experiment:
 
         x, y = train_data.feat, train_data.label
         if config.cuda:
-            x = x.cuda
+            x = torch.as_tensor(x, dtype=torch.float32).cuda()
+            y = torch.as_tensor(y, dtype=torch.float32).cuda()
+
+        out = net_ensemble.forward(x)
+        grad_direction = -1 * self.g_func(y, out)
+
+        w = model.encode()
+        w_size = (
+            self.config.feat_d * self.config.hidden_d
+            + self.config.hidden_d * self.config.out_d
+            + self.config.hidden_d
+            + self.config.out_d
+        )
+
+        # Randomwalk Steps
+        step_w = 0.025
+        step_eta = 0.2
+
+        pred_train = model.evaluate_proposal(x, w)
+        eta = np.log(np.var((pred_train - grad_direction).cpu().numpy()))
+        tau_pro = np.exp(eta)
+
+        sigma_squared = 25
+        nu_1 = 0
+        nu_2 = 0
+
+        prior_current = self.prior_func(
+            sigma_squared, nu_1, nu_2, w, tau_pro
+        )  # takes care of the gradients
+
+        log_lik = self.log_likelihood_func(model, x, grad_direction, w, tau_pro)
+
+        accepted = 0
+        for i in range(self.config.samples):
+
+            with torch.no_grad():
+                # print(np.sqrt(((model(x) - grad_direction).cpu().numpy() ** 2).mean()))
+                pass
+
+            # Propose new weight
+            w_proposal = np.random.normal(w, step_w, w_size)
+
+            eta_pro = eta + np.random.normal(0, step_eta, 1)
+            print(eta)
+            tau_pro = np.exp(eta_pro)
+
+            log_lik_proposal = self.log_likelihood_func(
+                model, x, grad_direction, w_proposal, tau_pro
+            )
+            prior_prop = self.prior_func(
+                sigma_squared, nu_1, nu_2, w_proposal, tau_pro
+            )  # takes care of the gradients
+
+            diff_prior = prior_prop - prior_current
+            diff_likelihood = log_lik_proposal - log_lik
+
+            try:
+                mh_prob = min(1, math.exp(diff_likelihood + diff_prior))
+            except OverflowError:
+                mh_prob = 1
+
+            #     print(diff_likelihood + diff_prior)
+            #     mh_prob = 1
+
+            u = random.uniform(0, 1)
+            if u < mh_prob:  # Accept
+                log_lik = log_lik_proposal
+                prior_current = prior_prop
+                w = w_proposal
+
+                eta = eta_pro
+
+                accepted += 1
 
     def train_backprop(self, net_ensemble, model, train_data):
         optimizer = get_optim(model.parameters(), config.lr)
@@ -224,9 +297,8 @@ class Experiment:
             if config.cuda:
                 x = torch.as_tensor(x, dtype=torch.float32).cuda()
                 y = torch.as_tensor(y, dtype=torch.float32).cuda()
-            out = net_ensemble.forward(x)
-            # out = torch.as_tensor(out, dtype=torch.float32).cuda()
 
+            out = net_ensemble.forward(x)
             grad_direction = -1 * self.g_func(y, out)
 
             out = model(x)
@@ -254,8 +326,6 @@ class Experiment:
         net_ensemble = EnsembleNet(self.c0, config.lr)
 
         train.shuffle()
-        # train_loader = DataLoader(train, 1, shuffle=True, drop_last=False, num_workers=2)
-        # test_loader = DataLoader(test, 1, shuffle=False, drop_last=False, num_workers=2)
 
         final_tr_score = 0
         final_te_score = 0
@@ -275,6 +345,7 @@ class Experiment:
             y = torch.tensor(train.label, dtype=torch.float32).cuda()
 
             gamma = self.lambda_func(y, model(x), net_ensemble.forward(x))
+            print(gamma)
 
             net_ensemble.add(model, gamma)
 

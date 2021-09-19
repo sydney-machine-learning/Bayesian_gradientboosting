@@ -58,6 +58,12 @@ class LibCSVData(Dataset):
         self.feat = self.feat.astype(np.float32)
         self.label = self.label.astype(np.float32)
 
+    def shuffle(self):
+        p = np.random.permutation(len(self.feat))
+
+        self.feat = self.feat[p]
+        self.label = self.label[p]
+
     def __getitem__(self, index):
         return self.feat[index, :], self.label[index]
 
