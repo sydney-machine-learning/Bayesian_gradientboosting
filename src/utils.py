@@ -3,6 +3,11 @@ import torch
 from sklearn.metrics import mean_squared_error
 
 
+def mse_torch(model, x, y):
+    with torch.no_grad():
+        return ((model(x) - y).cpu().numpy() ** 2).mean()
+
+
 def root_mse(net_ensemble, data, cuda=True):
     loss = 0
     total = 0

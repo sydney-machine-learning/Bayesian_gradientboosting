@@ -2,8 +2,10 @@ params:
   lr: 0.005
   num_nets: 5
   data: "sunspot"
-  exps: 10
+  exps: 30
   cuda: true
   multistep: false
   mcmc: true
-  samples: 10000
+  samples: 5000
+  langevin_gradients: true
+  lg_rate: 0.4

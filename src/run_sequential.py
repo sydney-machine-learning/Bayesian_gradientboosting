@@ -11,9 +11,10 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.optim import SGD, Adam
 
 from data.data import LibCSVData, LibTXTData
+from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL, MLP_2HL
-from utils import auc_score, init_gbnn, root_mse
+from utils import auc_score, init_gbnn, mse_torch, root_mse
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -123,42 +124,14 @@ class Experiment:
         else:
             raise ValueError("Invalid dataset specified")
 
-    def log_likelihood_timeseries(self, model, x, y, w, tau_sq):
-
-        fx = model.evaluate_proposal(x, w)
-
-        if y.ndim > 1:
-            n = (
-                y.shape[0] * y.shape[1]
-            )  # number of samples x number of outputs (prediction horizon)
-        else:
-            n = y.shape[0]
-
-        p1 = -(n / 2) * np.log(2 * math.pi * tau_sq)
-        p2 = 1 / 2 * tau_sq
-
-        result = p1 - (p2 * np.sum(np.square((y - fx).cpu().numpy())))
-
-        return result
-
-    def prior_likelihood_timeseries(self, sigma_squared, nu_1, nu_2, w, tausq):
-        h = self.config.hidden_d  # number hidden neurons
-        d = self.config.feat_d  # number input neurons
-        part1 = -1 * ((d * h + h + 2) / 2) * np.log(sigma_squared)
-        part2 = 1 / (2 * sigma_squared) * (np.sum(np.square(w)))
-
-        log_loss = part1 - part2 - (1 + nu_1) * np.log(tausq) - (nu_2 / tausq)
-
-        return log_loss
-
     def init_regression(self):
         self.g_func = lambda y, yhat: 2 * (yhat - y)
         self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx)) / torch.sum(fx * fx)
         self.loss_func = nn.MSELoss()
         self.acc_func = root_mse
 
-        self.log_likelihood_func = self.log_likelihood_timeseries
-        self.prior_func = self.prior_likelihood_timeseries
+        self.log_likelihood_func = Regression.log_likelihood
+        self.prior_func = Regression.prior_likelihood
 
         self.c0 = np.mean(self.train.label)
 
@@ -211,7 +184,31 @@ class Experiment:
                 )
             print(f"Total elapsed time: {total_time}")
 
+    def langevin_gradient(self, model, x, y, w, optimizer):
+
+        model.decode(w)
+
+        # for xi, yi in zip(x, y):
+        #     out = model(xi)
+        #     loss = self.loss_func(out, yi)
+
+        #     model.zero_grad()
+        #     loss.backward()
+        #     optimizer.step()
+
+        out = model(x)
+        loss = self.loss_func(out, y)
+
+        model.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        return model.encode()
+
     def train_mcmc(self, net_ensemble, model, train_data):
+
+        optimizer = get_optim(model.parameters(), self.config.lr)
+        # net_ensemble.to_train()  # Set the models in ensemble net to train mode
 
         x, y = train_data.feat, train_data.label
         if config.cuda:
@@ -242,42 +239,51 @@ class Experiment:
         nu_2 = 0
 
         prior_current = self.prior_func(
-            sigma_squared, nu_1, nu_2, w, tau_pro
+            sigma_squared, nu_1, nu_2, w, tau_pro, self.config
         )  # takes care of the gradients
 
         log_lik = self.log_likelihood_func(model, x, grad_direction, w, tau_pro)
 
-        accepted = 0
+        best_w = w
+        best_rmse = -1
         for i in range(self.config.samples):
+            lx = random.uniform(0, 1)
+            if self.config.langevin_gradients and lx < self.config.lg_rate:
+                w_gd = self.langevin_gradient(model, x, grad_direction, w, optimizer)
+                w_proposal = np.random.normal(w_gd, step_w, w_size)
+                w_prop_gd = self.langevin_gradient(model, x, grad_direction, w_proposal, optimizer)
 
-            with torch.no_grad():
-                # print(np.sqrt(((model(x) - grad_direction).cpu().numpy() ** 2).mean()))
-                pass
+                wc_delta = w - w_prop_gd
+                wp_delta = w_proposal - w_gd
 
-            # Propose new weight
-            w_proposal = np.random.normal(w, step_w, w_size)
+                sigma_sq = step_w ** 2
 
-            eta_pro = eta + np.random.normal(0, step_eta, 1)
-            print(eta)
+                first = -0.5 * np.sum(wc_delta ** 2) / sigma_sq
+                second = -0.5 * np.sum(wp_delta ** 2) / sigma_sq
+
+                diff_prop = first - second
+            else:
+                diff_prop = 0
+                w_proposal = np.random.normal(w, step_w, w_size)
+
+            # Fix eta
+            eta_pro = eta
             tau_pro = np.exp(eta_pro)
 
             log_lik_proposal = self.log_likelihood_func(
                 model, x, grad_direction, w_proposal, tau_pro
             )
             prior_prop = self.prior_func(
-                sigma_squared, nu_1, nu_2, w_proposal, tau_pro
+                sigma_squared, nu_1, nu_2, w_proposal, tau_pro, self.config
             )  # takes care of the gradients
 
             diff_prior = prior_prop - prior_current
             diff_likelihood = log_lik_proposal - log_lik
 
             try:
-                mh_prob = min(1, math.exp(diff_likelihood + diff_prior))
+                mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
             except OverflowError:
                 mh_prob = 1
-
-            #     print(diff_likelihood + diff_prior)
-            #     mh_prob = 1
 
             u = random.uniform(0, 1)
             if u < mh_prob:  # Accept
@@ -287,7 +293,12 @@ class Experiment:
 
                 eta = eta_pro
 
-                accepted += 1
+                temp = mse_torch(model, x, grad_direction)
+                if best_rmse == -1 or temp < best_rmse:
+                    best_rmse = temp
+                    best_w = w
+
+        model.decode(best_w)
 
     def train_backprop(self, net_ensemble, model, train_data):
         optimizer = get_optim(model.parameters(), config.lr)
@@ -345,7 +356,7 @@ class Experiment:
             y = torch.tensor(train.label, dtype=torch.float32).cuda()
 
             gamma = self.lambda_func(y, model(x), net_ensemble.forward(x))
-            print(gamma)
+            # print(gamma)
 
             net_ensemble.add(model, gamma)
 
