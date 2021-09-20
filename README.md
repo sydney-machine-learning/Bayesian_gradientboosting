@@ -16,17 +16,38 @@ python=3.6.10
 pytorch=1.9.0
 ```
 
+Install the packages in a conda environment before running.
+
 ## Configuration
 
 You can run the experiments with different parameter configurations by specifying them in the `config.yaml` file.
 
 ```yaml
 params:
-  lr: 0.005             # Learning rate
-  num_nets: 3           # Number of weak learners
-  data: "sunspot"       # Target dataset
-  exps: 30              # Number of total experiments to run
-  cuda: true            # Use CUDA or not
+  # Classification datasets
+  # - ionosphere
+  # - cancer
+  #
+  # Regression datasets
+  # - sunspot
+  # - rossler
+  data: "sunspot"
+
+
+  lr: 0.01                  # Learning rate
+  num_nets: 5               # Number of weak learners to train
+  exps: 30                  # Number of experiments to run 
+  cuda: true                # Use GPU
+
+  # Train on multistep version on the problem
+  # ( Only applies for timeseries regression problems )
+  multistep: false
+
+  # Options for MCMC sampling
+  mcmc: true                # Use MCMC, below options don't matter if false
+  samples: 5000             # Number of samples to generate
+  langevin_gradients: true  # Use langevin gradients
+  lg_rate: 0.5              # Rate for langevin gradients
 ```
 
 ## Experiments

@@ -256,7 +256,7 @@ class Experiment:
                 wc_delta = w - w_prop_gd
                 wp_delta = w_proposal - w_gd
 
-                sigma_sq = step_w ** 2
+                sigma_sq = step_w
 
                 first = -0.5 * np.sum(wc_delta ** 2) / sigma_sq
                 second = -0.5 * np.sum(wp_delta ** 2) / sigma_sq
@@ -268,6 +268,7 @@ class Experiment:
 
             # Fix eta
             eta_pro = eta
+            # eta_pro = eta + np.random.normal(0, step_eta, 1)
             tau_pro = np.exp(eta_pro)
 
             log_lik_proposal = self.log_likelihood_func(

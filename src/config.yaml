@@ -1,11 +1,25 @@
 params:
-  lr: 0.005
-  num_nets: 5
+  # Classification datasets
+  # - ionosphere
+  # - cancer
+  #
+  # Regression datasets
+  # - sunspot
+  # - rossler
   data: "sunspot"
-  exps: 30
-  cuda: true
+
+
+  lr: 0.01                  # Learning rate
+  num_nets: 5               # Number of weak learners to train
+  exps: 30                  # Number of experiments to run 
+  cuda: true                # Use GPU
+
+  # Train on multistep version on the problem
+  # ( Only applies for timeseries regression problems )
   multistep: false
+
+  # Options for MCMC sampling
   mcmc: true
-  samples: 5000
-  langevin_gradients: true
-  lg_rate: 0.4
+  samples: 5000             # Number of samples to generate
+  langevin_gradients: true  # Use langevin gradients
+  lg_rate: 0.5              # Rate for langevin gradients
