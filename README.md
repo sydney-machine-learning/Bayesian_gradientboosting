@@ -4,6 +4,14 @@ This is the repository containing the source code relating to this research:
 
 == insert paper ==
 
+## TODO
+
+- Fix broken classification code
+  - Lambda values are exploding as boosting levels increase?
+  - How do we handle the residuals for classification problems? 
+    - Breaks the likelihoods if left as floats
+  
+
 ## Requirements
 
 The code was implemented in Python 3.6.10 and utilized the following important packages:

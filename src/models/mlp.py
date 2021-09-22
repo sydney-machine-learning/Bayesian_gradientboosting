@@ -10,14 +10,13 @@ class MLP_1HL(nn.Module):
         super(MLP_1HL, self).__init__()
         self.in_layer = nn.Linear(dim_in, dim_hidden)
         self.out_layer = nn.Linear(dim_hidden, dim_out)
-        self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU()
 
         self.top = (dim_in, dim_hidden, dim_out)
 
     def forward(self, x):
-        out = self.relu(self.in_layer(x))
-        return self.out_layer(out).squeeze()
+        out = self.out_layer(self.relu(self.in_layer(x)))
+        return out
 
     def evaluate_proposal(self, x, w):
         with torch.no_grad():
@@ -56,10 +55,6 @@ class MLP_1HL(nn.Module):
     def encode(self):
         state_dict = self.state_dict()
 
-        # print(state_dict["in_layer.weight"].size())
-        # print(state_dict["out_layer.weight"].size())
-        # print(state_dict["in_layer.bias"].size())
-        # print(state_dict["out_layer.bias"].size())
         return np.concatenate(
             [
                 state_dict["in_layer.weight"].cpu().ravel(),
@@ -74,21 +69,3 @@ class MLP_1HL(nn.Module):
         model = MLP_1HL(config.feat_d, config.hidden_d, config.out_d)
         return model
 
-
-class MLP_2HL(nn.Module):
-    def __init__(self, dim_in, dim_hidden, dim_out):
-        super(MLP_2HL, self).__init__()
-        self.in_layer = nn.Linear(dim_in, dim_hidden)
-        self.hidden_layer = nn.Linear(dim_hidden, dim_hidden)
-        self.out_layer = nn.Linear(dim_hidden, dim_out)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        out = self.in_layer(x)
-        out = self.hidden_layer(out)
-        return self.out_layer(out).squeeze()
-
-    @classmethod
-    def get_model(cls, config):
-        model = MLP_2HL(config.feat_d, config.hidden_d, config.out_d)
-        return model

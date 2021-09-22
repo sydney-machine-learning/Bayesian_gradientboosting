@@ -8,12 +8,13 @@ import torch
 import torch.nn as nn
 import yaml
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from torch.autograd import grad
 from torch.optim import SGD, Adam
 
 from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
-from models.mlp import MLP_1HL, MLP_2HL
+from models.mlp import MLP_1HL
 from utils import auc_score, init_gbnn, mse_torch, root_mse
 
 with open("config.yaml", "r") as yamlfile:
@@ -28,27 +29,28 @@ class Config:
 config = Config(**data["params"])
 
 
-def get_data(train_path, test_path, multistep=False, binary=False):
+def get_data_help(path, config, index_col=None):
+    if ".csv" in path:
+        return LibCSVData(path, config, index_col=index_col)
+    elif ".txt" in path:
+        return LibTXTData(path, config)
+    else:
+        raise ValueError("Invalid data file type provided.")
 
-    if binary:
-        if multistep:
-            train = LibCSVData(train_path + "train1.csv", config)
-            test = LibCSVData(test_path + "test1.csv", config)
-        else:
-            train = LibTXTData(train_path + "train.txt", config)
-            test = LibTXTData(test_path + "test.txt", config)
+
+def get_data(train_path, test_path, multistep=False, classification=False):
+
+    if classification:
+        train = get_data_help(train_path, config)
+        test = get_data_help(test_path, config)
 
         scaler = MinMaxScaler()
         scaler.fit(train.feat)
         train.feat = scaler.transform(train.feat)
         test.feat = scaler.transform(test.feat)
     else:
-        if multistep:
-            train = LibCSVData(train_path + "train1.csv", config)
-            test = LibCSVData(test_path + "test1.csv", config)
-        else:
-            train = LibTXTData(train_path + "train.txt", config)
-            test = LibTXTData(test_path + "test.txt", config)
+        train = get_data_help(train_path, config, index_col=0)
+        test = get_data_help(test_path, config, index_col=0)
 
         scaler = StandardScaler()
         scaler.fit(train.feat)
@@ -73,34 +75,43 @@ class Experiment:
         self.acc_func = None
         self.c0 = None
 
-    def load_data(self, binary=False):
+    def load_data(self, classification=False):
         if config.data == "sunspot":
-            train_path = "datasets/Sunspot/"
-            test_path = "datasets/Sunspot/"
-
+            if self.config.multistep:
+                train_path = "datasets/Sunspot/train1.csv"
+                test_path = "datasets/Sunspot/test1.csv"
+            else:
+                train_path = "datasets/Sunspot/train.txt"
+                test_path = "datasets/Sunspot/test.txt"
             config.hidden_d = 10
         elif config.data == "rossler":
-            train_path = "datasets/Rossler/"
-            test_path = "datasets/Rossler/"
+            if self.config.multistep:
+                train_path = "datasets/Rossler/train1.csv"
+                test_path = "datasets/Rossler/test1.csv"
+            else:
+                train_path = "datasets/Rossler/train.txt"
+                test_path = "datasets/Rossler/test.txt"
 
             config.hidden_d = 10
         elif config.data == "ionosphere":
-            train_path = "datasets/Ionosphere/"
-            test_path = "datasets/Ionosphere/"
+            train_path = "datasets/Ionosphere/ftrain.csv"
+            test_path = "datasets/Ionosphere/ftest.csv"
 
             config.feat_d = 34
             config.hidden_d = 50
+            config.out_d = 2
         elif config.data == "cancer":
-            train_path = "datasets/Cancer/"
-            test_path = "datasets/Cancer/"
+            train_path = "datasets/Cancer/ftrain.txt"
+            test_path = "datasets/Cancer/ftest.txt"
 
             config.feat_d = 9
             config.hidden_d = 12
+            config.out_d = 2
         else:
             raise ValueError("Invalid dataset specified")
 
         self.train, self.test = get_data(
-            train_path, test_path, multistep=self.config.multistep, binary=binary
+            train_path, test_path, multistep=self.config.multistep, classification=classification
         )
 
     def init_experiment(self):
@@ -116,9 +127,7 @@ class Experiment:
             self.init_regression()
             self.config.classification = False
         elif self.config.data in ["ionosphere", "cancer"]:  # Classification problem
-            self.config.out_d = 1
-
-            self.load_data(binary=True)
+            self.load_data(classification=True)
             self.init_classification()
             self.config.classification = True
         else:
@@ -133,7 +142,7 @@ class Experiment:
         self.log_likelihood_func = Regression.log_likelihood
         self.prior_func = Regression.prior_likelihood
 
-        self.c0 = np.mean(self.train.label)
+        self.c0 = np.mean(self.train.label, axis=0)
 
     def init_classification(self):
         self.g_func = lambda y, yhat: -1 * (2 * y) / (1 + torch.exp(2 * y * yhat))
@@ -145,7 +154,10 @@ class Experiment:
             -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
         )
         self.loss_func = nn.MSELoss()
+        # self.loss_func = nn.CrossEntropyLoss()
         self.acc_func = auc_score
+
+        self.softmax = nn.Softmax(dim=-1)
 
         self.c0 = init_gbnn(self.train)
 
@@ -242,7 +254,7 @@ class Experiment:
             sigma_squared, nu_1, nu_2, w, tau_pro, self.config
         )  # takes care of the gradients
 
-        log_lik = self.log_likelihood_func(model, x, grad_direction, w, tau_pro)
+        log_lik = self.log_likelihood_func(model, x, grad_direction, w, tau_sq=tau_pro)
 
         best_w = w
         best_rmse = -1
@@ -311,10 +323,13 @@ class Experiment:
                 y = torch.as_tensor(y, dtype=torch.float32).cuda()
 
             out = net_ensemble.forward(x)
+            if self.config.classification:
+                out = self.softmax(out)
             grad_direction = -1 * self.g_func(y, out)
 
             out = model(x)
-            out = torch.as_tensor(out, dtype=torch.float32).cuda()
+            if self.config.classification:
+                out = self.softmax(out)
             loss = self.loss_func(out, grad_direction)
 
             model.zero_grad()
@@ -335,7 +350,7 @@ class Experiment:
         """
         model_type = MLP_1HL
 
-        net_ensemble = EnsembleNet(self.c0, config.lr)
+        net_ensemble = EnsembleNet(self.c0, self.config.lr)
 
         train.shuffle()
 
@@ -356,8 +371,19 @@ class Experiment:
             x = torch.tensor(train.feat, dtype=torch.float32).cuda()
             y = torch.tensor(train.label, dtype=torch.float32).cuda()
 
-            gamma = self.lambda_func(y, model(x), net_ensemble.forward(x))
-            # print(gamma)
+            fx = model(x)
+            Fx = net_ensemble.forward(x)
+            Fx = torch.as_tensor(Fx, dtype=torch.float32).cuda()
+
+            # print(fx)
+            # print(Fx)
+            # print()
+            if self.config.classification:
+                fx = self.softmax(fx)
+                Fx = self.softmax(Fx)
+
+            gamma = self.lambda_func(y, fx, Fx)
+            print(gamma)
 
             net_ensemble.add(model, gamma)
 

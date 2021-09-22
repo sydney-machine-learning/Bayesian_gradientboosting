@@ -8,16 +8,10 @@ class LibTXTData(Dataset):
     def __init__(self, root, config):
         data = np.loadtxt(root)
 
-        if config.out_d == 1:
-            self.feat, self.label = (
-                data[:, 0 : config.feat_d],
-                data[:, config.feat_d],
-            )
-        else:
-            self.feat, self.label = (
-                data[:, 0 : config.feat_d],
-                data[:, config.feat_d : config.feat_d + config.out_d],
-            )
+        self.feat, self.label = (
+            data[:, 0 : config.feat_d],
+            data[:, config.feat_d : config.feat_d + config.out_d],
+        )
         del data
         self.feat = self.feat.astype(np.float32)
         self.label = self.label.astype(np.float32)
@@ -40,19 +34,13 @@ class LibTXTData(Dataset):
 
 
 class LibCSVData(Dataset):
-    def __init__(self, root, config):
-        data = pd.read_csv(root, index_col=0).values
+    def __init__(self, root, config, index_col=None):
+        data = pd.read_csv(root, index_col=index_col).values
 
-        if config.out_d == 1:
-            self.feat, self.label = (
-                data[:, 0 : config.feat_d],
-                data[:, config.feat_d],
-            )
-        else:
-            self.feat, self.label = (
-                data[:, 0 : config.feat_d],
-                data[:, config.feat_d : config.feat_d + config.out_d],
-            )
+        self.feat, self.label = (
+            data[:, 0 : config.feat_d],
+            data[:, config.feat_d : config.feat_d + config.out_d],
+        )
         del data
 
         self.feat = self.feat.astype(np.float32)

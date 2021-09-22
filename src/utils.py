@@ -1,11 +1,17 @@
 import numpy as np
 import torch
-from sklearn.metrics import mean_squared_error
+import torch.nn as nn
+from sklearn.metrics import mean_squared_error, roc_auc_score
 
 
 def mse_torch(model, x, y):
     with torch.no_grad():
         return ((model(x) - y).cpu().numpy() ** 2).mean()
+
+
+def rmse_torch(model, x, y):
+    with torch.no_grad():
+        return np.sqrt(((model(x) - y).cpu().numpy() ** 2).mean())
 
 
 def root_mse(net_ensemble, data, cuda=True):
@@ -33,26 +39,38 @@ def root_mse(net_ensemble, data, cuda=True):
     return np.sqrt(loss / total)
 
 
-def auc_score(net_ensemble, test_loader, cuda=True):
-    actual = []
-    posterior = []
-    for x, y in test_loader:
-        if cuda:
-            x = torch.as_tensor(x, dtype=torch.float32).cuda()
-        with torch.no_grad():
-            out = net_ensemble.forward(x)
-        prob = 1.0 - 1.0 / torch.exp(
-            out
-        )  # Why not using the scores themselve than converting to prob
-        prob = prob.cpu().numpy().tolist()
+def auc_score(net_ensemble, data, cuda=True):
+    # actual = []
+    # posterior = []
+    # for x, y in test_loader:
+    #     if cuda:
+    #         x = torch.as_tensor(x, dtype=torch.float32).cuda()
+    #     with torch.no_grad():
+    #         out = net_ensemble.forward(x)
+    #     prob = 1.0 - 1.0 / torch.exp(
+    #         out
+    #     )  # Why not using the scores themselve than converting to prob
+    #     prob = prob.cpu().numpy().tolist()
 
-        if type(prob) is float:
-            posterior.append(prob)
-            actual.append(y)
-        else:
-            posterior.extend(prob)
-            actual.extend(y.numpy().tolist())
-    score = auc(actual, posterior)
+    #     if type(prob) is float:
+    #         posterior.append(prob)
+    #         actual.append(y)
+    #     else:
+    #         posterior.extend(prob)
+    #         actual.extend(y.numpy().tolist())
+    # score = auc(actual, posterior)
+    softmax = nn.Softmax(dim=-1)
+    x, y = data.feat, data.label
+    score = roc_auc_score
+    if cuda:
+        x = torch.as_tensor(x, dtype=torch.float32).cuda()
+
+    with torch.no_grad():
+        out = net_ensemble.forward(x)
+
+    out = softmax(out).cpu().numpy()
+    score = roc_auc_score(y, out)
+
     return score
 
 
@@ -117,11 +135,8 @@ def auc(actual, posterior):
 
 
 def init_gbnn(train):
-    positive = negative = 0
-    for i in range(len(train)):
-        if train[i][1] > 0:
-            positive += 1
-        else:
-            negative += 1
-    blind_acc = max(positive, negative) / (positive + negative)
-    return float(np.log(positive / negative))
+    data = torch.as_tensor(train.label, dtype=torch.float32).cuda()
+    totals = torch.sum(data, 0)
+    probs = torch.zeros(data.shape[1])
+    probs[torch.argmax(totals)] = 1
+    return probs

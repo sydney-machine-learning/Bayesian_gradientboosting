@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -38,14 +39,16 @@ class EnsembleNet(object):
             m.train(True)
 
     def forward(self, x):
-        prediction = self.c0
+        # print(x)
+        if x.dim() > 1:
+            prediction = np.tile(self.c0, (x.shape[0], 1))
+        else:
+            prediction = self.c0
+
+        # print(self.c0)
+        prediction = torch.as_tensor(prediction, dtype=torch.float32).cuda()
         with torch.no_grad():
             for m, g in zip(self.models, self.gammas):
                 prediction += g * m(x)
-        return prediction
 
-    def forward_grad(self, x):
-        prediction = self.c0
-        for m, g in zip(self.models, self.gammas):
-            prediction += g * m(x)
         return prediction
