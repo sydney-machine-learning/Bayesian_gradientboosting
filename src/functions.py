@@ -27,7 +27,7 @@ class Classification:
 
 
 class Regression:
-    def log_likelihood(model, x, y, w, *, tau_sq=0):
+    def log_likelihood(model, x, y, w, tau_sq):
 
         fx = model.evaluate_proposal(x, w)
 

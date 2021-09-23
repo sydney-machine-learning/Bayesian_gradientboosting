@@ -6,7 +6,7 @@ params:
   # Regression datasets
   # - sunspot
   # - rossler
-  data: "ionosphere"
+  data: "sunspot"
 
 
   lr: 0.01                  # Learning rate
@@ -16,10 +16,10 @@ params:
 
   # Train on multistep version on the problem
   # ( Only applies for timeseries regression problems )
-  multistep: false
+  multistep: true
 
   # Options for MCMC sampling
-  mcmc: false
+  mcmc: true
   samples: 5000             # Number of samples to generate
-  langevin_gradients: false  # Use langevin gradients
+  langevin_gradients: true  # Use langevin gradients
   lg_rate: 0.5              # Rate for langevin gradients

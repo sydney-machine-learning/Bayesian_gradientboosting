@@ -75,27 +75,6 @@ def auc_score(net_ensemble, data, cuda=True):
     return score
 
 
-def class_acc(net_ensemble, data, cuda=True):
-    softmax = nn.Softmax(dim=-1)
-    x, y = data.feat, data.label
-    if cuda:
-        x = torch.as_tensor(x, dtype=torch.float32).cuda()
-
-    with torch.no_grad():
-        out = net_ensemble.forward(x)
-
-    # out = softmax(out)
-    out = torch.argmax(out, -1)
-
-    count = 0
-    for yi, yi_pred in zip(np.argmax(y, axis=-1), out):
-        if yi == yi_pred:
-            count += 1
-
-    score = 100 * count / len(data)
-    return score
-
-
 def tied_rank(x):
     """
     Computes the tied rank of elements in x.

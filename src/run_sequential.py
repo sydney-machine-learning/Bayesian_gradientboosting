@@ -15,7 +15,7 @@ from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
-from utils import auc_score, class_acc, init_gbnn, mse_torch, root_mse
+from utils import auc_score, init_gbnn, mse_torch, root_mse
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -138,7 +138,7 @@ class Experiment:
 
     def init_regression(self):
         self.g_func = lambda y, yhat: 2 * (yhat - y)
-        self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx)) / torch.sum(fx * fx)
+        self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
         self.loss_func = nn.MSELoss()
         self.acc_func = root_mse
 
@@ -162,9 +162,9 @@ class Experiment:
 
         self.loss_func = nn.MSELoss()
         self.acc_func = auc_score
-        # self.acc_func = class_acc
 
-        self.softmax = nn.Softmax(dim=-1)
+        self.log_likelihood_func = Regression.log_likelihood
+        self.prior_func = Regression.prior_likelihood
 
         self.c0 = init_gbnn(self.train)
 
@@ -380,7 +380,7 @@ class Experiment:
             Fx = torch.as_tensor(Fx, dtype=torch.float32).cuda()
 
             gamma = self.lambda_func(y, fx, Fx)
-            print(gamma)
+            # print(gamma)
 
             net_ensemble.add(model, gamma)
 
