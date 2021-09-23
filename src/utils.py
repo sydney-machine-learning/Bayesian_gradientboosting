@@ -42,7 +42,7 @@ def root_mse(net_ensemble, data, cuda=True):
 def auc_score(net_ensemble, data, cuda=True):
     # actual = []
     # posterior = []
-    # for x, y in test_loader:
+    # for x, y in data:
     #     if cuda:
     #         x = torch.as_tensor(x, dtype=torch.float32).cuda()
     #     with torch.no_grad():
@@ -57,8 +57,9 @@ def auc_score(net_ensemble, data, cuda=True):
     #         actual.append(y)
     #     else:
     #         posterior.extend(prob)
-    #         actual.extend(y.numpy().tolist())
+    #         actual.extend(y.tolist())
     # score = auc(actual, posterior)
+
     softmax = nn.Softmax(dim=-1)
     x, y = data.feat, data.label
     score = roc_auc_score
@@ -68,9 +69,30 @@ def auc_score(net_ensemble, data, cuda=True):
     with torch.no_grad():
         out = net_ensemble.forward(x)
 
-    out = softmax(out).cpu().numpy()
-    score = roc_auc_score(y, out)
+    out = softmax(out)
+    score = roc_auc_score(y, out.cpu().numpy())
+    # print(score)
+    return score
 
+
+def class_acc(net_ensemble, data, cuda=True):
+    softmax = nn.Softmax(dim=-1)
+    x, y = data.feat, data.label
+    if cuda:
+        x = torch.as_tensor(x, dtype=torch.float32).cuda()
+
+    with torch.no_grad():
+        out = net_ensemble.forward(x)
+
+    # out = softmax(out)
+    out = torch.argmax(out, -1)
+
+    count = 0
+    for yi, yi_pred in zip(np.argmax(y, axis=-1), out):
+        if yi == yi_pred:
+            count += 1
+
+    score = 100 * count / len(data)
     return score
 
 
@@ -139,4 +161,6 @@ def init_gbnn(train):
     totals = torch.sum(data, 0)
     probs = torch.zeros(data.shape[1])
     probs[torch.argmax(totals)] = 1
+
+    # probs[0] = torch.argmax(totals)
     return probs

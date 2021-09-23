@@ -15,7 +15,7 @@ from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
-from utils import auc_score, init_gbnn, mse_torch, root_mse
+from utils import auc_score, class_acc, init_gbnn, mse_torch, root_mse
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -44,10 +44,10 @@ def get_data(train_path, test_path, multistep=False, classification=False):
         train = get_data_help(train_path, config)
         test = get_data_help(test_path, config)
 
-        scaler = MinMaxScaler()
-        scaler.fit(train.feat)
-        train.feat = scaler.transform(train.feat)
-        test.feat = scaler.transform(test.feat)
+        # scaler = MinMaxScaler()
+        # scaler.fit(train.feat)
+        # train.feat = scaler.transform(train.feat)
+        # test.feat = scaler.transform(test.feat)
     else:
         train = get_data_help(train_path, config, index_col=0)
         test = get_data_help(test_path, config, index_col=0)
@@ -97,6 +97,9 @@ class Experiment:
             train_path = "datasets/Ionosphere/ftrain.csv"
             test_path = "datasets/Ionosphere/ftest.csv"
 
+            # train_path = "datasets/Ionosphere/train.txt"
+            # test_path = "datasets/Ionosphere/test.txt"
+
             config.feat_d = 34
             config.hidden_d = 50
             config.out_d = 2
@@ -145,17 +148,21 @@ class Experiment:
         self.c0 = np.mean(self.train.label, axis=0)
 
     def init_classification(self):
-        self.g_func = lambda y, yhat: -1 * (2 * y) / (1 + torch.exp(2 * y * yhat))
-        self.h_func = lambda y, yhat: (4 * torch.exp(2 * y * yhat)) / (
-            1 + torch.exp(2 * y * yhat) ** 2
-        )
+        # self.g_func = lambda y, yhat: -1 * (2 * y) / (1 + torch.exp(2 * y * yhat))
+        # self.h_func = lambda y, yhat: (4 * torch.exp(2 * y * yhat)) / (
+        #     1 + torch.exp(2 * y * yhat) ** 2
+        # )
 
-        self.lambda_func = lambda y, fx, Fx: torch.mean(
-            -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
-        )
+        # self.lambda_func = lambda y, fx, Fx: torch.mean(
+        #     -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
+        # )
+
+        self.g_func = lambda y, yhat: 2 * (yhat - y)
+        self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
+
         self.loss_func = nn.MSELoss()
-        # self.loss_func = nn.CrossEntropyLoss()
         self.acc_func = auc_score
+        # self.acc_func = class_acc
 
         self.softmax = nn.Softmax(dim=-1)
 
@@ -323,13 +330,10 @@ class Experiment:
                 y = torch.as_tensor(y, dtype=torch.float32).cuda()
 
             out = net_ensemble.forward(x)
-            if self.config.classification:
-                out = self.softmax(out)
-            grad_direction = -1 * self.g_func(y, out)
 
+            grad_direction = -1 * self.g_func(y, out)
             out = model(x)
-            if self.config.classification:
-                out = self.softmax(out)
+
             loss = self.loss_func(out, grad_direction)
 
             model.zero_grad()
@@ -374,13 +378,6 @@ class Experiment:
             fx = model(x)
             Fx = net_ensemble.forward(x)
             Fx = torch.as_tensor(Fx, dtype=torch.float32).cuda()
-
-            # print(fx)
-            # print(Fx)
-            # print()
-            if self.config.classification:
-                fx = self.softmax(fx)
-                Fx = self.softmax(Fx)
 
             gamma = self.lambda_func(y, fx, Fx)
             print(gamma)
