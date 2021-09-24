@@ -8,19 +8,7 @@ from utils import rmse_torch
 class Classification:
     def log_likelihood(model, x, y, w):
 
-        fx = model.evaluate_proposal(x, w)
-        rmse = rmse_torch(fx, y)
-        z = np.zeros((x.shape[0], model.top[-1]))
-
-        lhood = 0
-        for i in range(x.shape[0]):
-            for j in range(model.top[-1]):
-                if j == y[i]:
-                    z[i, j] = 1
-
-                lhood += z[i, j] * np.log(prob[i, j])
-
-        return lhood
+        pass
 
     def prior_likelihood(sigma_squared, nu_1, nu_2, w, tausq, config):
         pass
@@ -43,7 +31,7 @@ class Regression:
 
         result = p1 - (p2 * np.sum(np.square((y - fx).cpu().numpy())))
 
-        return result
+        return result, fx
 
     def prior_likelihood(sigma_squared, nu_1, nu_2, w, tausq, config):
         h = config.hidden_d  # number hidden neurons

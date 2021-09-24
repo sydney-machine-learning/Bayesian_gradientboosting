@@ -9,10 +9,19 @@ class EnsembleNet(object):
         self.gammas = []
         self.c0 = c0
         self.lr = lr
+        self.log_likelihood = 1
 
-    def add(self, model, gamma):
+    def add(self, model, gamma, log_likelihood=None):
         self.models.append(model)
         self.gammas.append(gamma)
+        if log_likelihood:
+            self.log_likelihood *= log_likelihood
+
+    def remove(self):
+        if not self.models:
+            return
+        self.models.pop()
+        self.gammas.pop()
 
     def parameters(self):
         params = []

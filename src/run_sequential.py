@@ -2,11 +2,13 @@ import math
 import random
 import time
 from multiprocessing import Value
+from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 import yaml
+from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.autograd import grad
 from torch.optim import SGD, Adam
@@ -56,8 +58,8 @@ def get_data(train_path, test_path, multistep=False, classification=False):
 
 
 def get_optim(params, lr):
-    # optimizer = Adam(params, lr)
-    optimizer = SGD(params, lr)
+    optimizer = Adam(params, lr)
+    # optimizer = SGD(params, lr)
     return optimizer
 
 
@@ -91,9 +93,6 @@ class Experiment:
         elif config.data == "ionosphere":
             train_path = "datasets/Ionosphere/ftrain.csv"
             test_path = "datasets/Ionosphere/ftest.csv"
-
-            # train_path = "datasets/Ionosphere/train.txt"
-            # test_path = "datasets/Ionosphere/test.txt"
 
             config.feat_d = 34
             config.hidden_d = 50
@@ -168,6 +167,10 @@ class Experiment:
         Runs the full experiment and prints out accuracy statistics after each stage (boosting level).
         """
 
+        if self.config.plot_graphs:
+            self.run(self.config.num_nets)
+            return
+
         for level in range(1, config.num_nets + 1):
 
             t0 = time.time()
@@ -176,7 +179,7 @@ class Experiment:
             te_score_l = []
             accepted_l = []
             for _ in range(config.exps):
-                tr_rmse, te_rmse, accepted = self.run(self.train, self.test, level)
+                tr_rmse, te_rmse, accepted = self.run(level)
                 tr_score_l.append(tr_rmse)
                 te_score_l.append(te_rmse)
                 accepted_l.append(accepted)
@@ -223,15 +226,33 @@ class Experiment:
 
         return model.encode()
 
-    def train_mcmc(self, net_ensemble, model, train_data):
+    def compute_accuracy(self, fx, Fx, data):
+
+        with torch.no_grad():
+            # Calculate gamma
+            x = torch.tensor(data.feat, dtype=torch.float32).cuda()
+            y = torch.tensor(data.label, dtype=torch.float32).cuda()
+
+            gamma = self.lambda_func(y, fx, Fx)
+
+            pred = Fx + gamma * fx
+            ret = self.acc_func(None, data, out=pred.cpu().numpy())
+
+            return ret
+
+    def train_mcmc(self, net_ensemble, model):
 
         optimizer = get_optim(model.parameters(), self.config.lr)
         # net_ensemble.to_train()  # Set the models in ensemble net to train mode
 
-        x, y = train_data.feat, train_data.label
+        x, y = self.train.feat, self.train.label
+        x_test, y_test = self.test.feat, self.test.label
         if config.cuda:
             x = torch.as_tensor(x, dtype=torch.float32).cuda()
             y = torch.as_tensor(y, dtype=torch.float32).cuda()
+
+            x_test = torch.as_tensor(x_test, dtype=torch.float32).cuda()
+            y_test = torch.as_tensor(y_test, dtype=torch.float32).cuda()
 
         out = net_ensemble.forward(x)
         grad_direction = -1 * self.g_func(y, out)
@@ -260,10 +281,16 @@ class Experiment:
             sigma_squared, nu_1, nu_2, w, tau_pro, self.config
         )  # takes care of the gradients
 
-        log_lik = self.log_likelihood_func(model, x, grad_direction, w, tau_sq=tau_pro)
+        log_lik, fx_train = self.log_likelihood_func(model, x, grad_direction, w, tau_sq=tau_pro)
+        _, fx_test = self.log_likelihood_func(model, x_test, y_test, w, tau_sq=tau_pro)
+
+        with torch.no_grad():
+            Fx_train = torch.as_tensor(net_ensemble.forward(x), dtype=torch.float32).cuda()
+            Fx_test = torch.as_tensor(net_ensemble.forward(x_test), dtype=torch.float32).cuda()
 
         best_w = w
         best_rmse = -1
+        best_log_likelihood = -1
         accepted = 0
         for i in range(self.config.samples):
             lx = random.uniform(0, 1)
@@ -290,9 +317,13 @@ class Experiment:
             # eta_pro = eta + np.random.normal(0, step_eta, 1)
             tau_pro = np.exp(eta_pro)
 
-            log_lik_proposal = self.log_likelihood_func(
+            log_lik_proposal, fx_train_prop = self.log_likelihood_func(
                 model, x, grad_direction, w_proposal, tau_pro
             )
+            _, fx_test_prop = self.log_likelihood_func(
+                model, x_test, y_test, w_proposal, tau_sq=tau_pro
+            )
+
             prior_prop = self.prior_func(
                 sigma_squared, nu_1, nu_2, w_proposal, tau_pro, self.config
             )  # takes care of the gradients
@@ -314,20 +345,31 @@ class Experiment:
 
                 eta = eta_pro
 
+                fx_train = fx_train_prop
+                fx_test = fx_test_prop
+
                 temp = mse_torch(model, x, grad_direction)
                 if best_rmse == -1 or temp < best_rmse:
                     best_rmse = temp
                     best_w = w
+                    best_log_likelihood = log_lik
+
+            # Append diagnostic results
+            if self.config.plot_graphs:
+
+                self.likelihoods.append(log_lik)
+                self.tr_accs.append(self.compute_accuracy(fx_train, Fx_train, self.train))
+                self.te_accs.append(self.compute_accuracy(fx_test, Fx_test, self.test))
 
         model.decode(best_w)
 
-        return accepted / self.config.samples * 100
+        return accepted / self.config.samples * 100, best_log_likelihood
 
-    def train_backprop(self, net_ensemble, model, train_data):
+    def train_backprop(self, net_ensemble, model):
         optimizer = get_optim(model.parameters(), config.lr)
         net_ensemble.to_train()  # Set the models in ensemble net to train mode
 
-        for i, (x, y) in enumerate(train_data):
+        for i, (x, y) in enumerate(self.train):
             if config.cuda:
                 x = torch.as_tensor(x, dtype=torch.float32).cuda()
                 y = torch.as_tensor(y, dtype=torch.float32).cuda()
@@ -343,7 +385,7 @@ class Experiment:
             loss.backward()
             optimizer.step()
 
-    def run(self, train, test, num_nets):
+    def run(self, num_nets):
         """
         Run one instance of the experiment
 
@@ -359,8 +401,11 @@ class Experiment:
 
         net_ensemble = EnsembleNet(self.c0, self.config.lr)
 
-        train.shuffle()
+        self.train.shuffle()
 
+        self.likelihoods = []
+        self.tr_accs = []
+        self.te_accs = []
         final_tr_score = 0
         final_te_score = 0
         accepted = 0
@@ -370,14 +415,16 @@ class Experiment:
             if config.cuda:
                 model.cuda()
 
+            log_likelihood = None
             if config.mcmc:
-                accepted += self.train_mcmc(net_ensemble, model, train)
+                temp, log_likelihood = self.train_mcmc(net_ensemble, model)
+                accepted += temp
             else:
-                self.train_backprop(net_ensemble, model, train)
+                self.train_backprop(net_ensemble, model)
 
             # Calculate gamma
-            x = torch.tensor(train.feat, dtype=torch.float32).cuda()
-            y = torch.tensor(train.label, dtype=torch.float32).cuda()
+            x = torch.tensor(self.train.feat, dtype=torch.float32).cuda()
+            y = torch.tensor(self.train.label, dtype=torch.float32).cuda()
 
             fx = model(x)
             Fx = net_ensemble.forward(x)
@@ -386,24 +433,55 @@ class Experiment:
             gamma = self.lambda_func(y, fx, Fx)
             # print(gamma)
 
-            net_ensemble.add(model, gamma)
+            net_ensemble.add(model, gamma, log_likelihood=log_likelihood)
 
             if config.cuda:
                 net_ensemble.to_cuda()
             net_ensemble.to_eval()  # Set the models in ensemble net to eval mode
 
-            # Train
-            final_tr_score = self.acc_func(net_ensemble, train)
+            final_tr_score = self.acc_func(net_ensemble, self.train)
+            final_te_score = self.acc_func(net_ensemble, self.test)
 
-            final_te_score = self.acc_func(net_ensemble, test)
-
-            # print(
-            #     f"Stage: {stage}  RMSE@Tr: {tr_rmse:.5f}, RMSE@Val: {val_rmse:.5f}, RMSE@Te: {te_rmse:.5f}"
-            # )
-
-        # print(f"Stage: {num_nets}  RMSE@Tr: {tr_rmse:.5f}, final RMSE@Te: {te_rmse:.5f}")
+        # Plot results
+        if self.config.mcmc and self.config.plot_graphs:
+            self.save_plots(num_nets)
 
         return final_tr_score, final_te_score, accepted / num_nets
+
+    def save_plots(self, n):
+        # Make folders
+        path = f"plots/{self.config.data}/"
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+        # Likelihoods for all weak learners
+        for i in range(n):
+            plt.figure()
+            plt.plot(
+                list(range(1, self.config.samples + 1)),
+                self.likelihoods[i * self.config.samples : (i + 1) * self.config.samples],
+            )
+            plt.xlabel("Samples")
+            plt.ylabel("Log-likelihoods")
+            plt.savefig(path + f"likelihoods_{i}.png")
+
+        # Training acc
+        plt.figure()
+        plt.plot(
+            list(range(1, self.config.samples * n + 1)), self.tr_accs,
+        )
+        plt.xlabel("Samples")
+        plt.ylabel("Train score")
+        plt.savefig(path + f"train_scores.png")
+
+        # Test acc
+        # Training acc
+        plt.figure()
+        plt.plot(
+            list(range(1, self.config.samples * n + 1)), self.te_accs,
+        )
+        plt.xlabel("Samples")
+        plt.ylabel("Test score")
+        plt.savefig(path + f"test_scores.png")
 
 
 if __name__ == "__main__":
