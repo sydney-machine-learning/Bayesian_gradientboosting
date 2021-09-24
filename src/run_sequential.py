@@ -43,26 +43,21 @@ def get_data(train_path, test_path, multistep=False, classification=False):
     if classification:
         train = get_data_help(train_path, config)
         test = get_data_help(test_path, config)
-
-        # scaler = MinMaxScaler()
-        # scaler.fit(train.feat)
-        # train.feat = scaler.transform(train.feat)
-        # test.feat = scaler.transform(test.feat)
     else:
         train = get_data_help(train_path, config, index_col=0)
         test = get_data_help(test_path, config, index_col=0)
 
-        scaler = StandardScaler()
-        scaler.fit(train.feat)
-        train.feat = scaler.transform(train.feat)
-        test.feat = scaler.transform(test.feat)
+    scaler = StandardScaler()
+    scaler.fit(train.feat)
+    train.feat = scaler.transform(train.feat)
+    test.feat = scaler.transform(test.feat)
 
     return train, test
 
 
 def get_optim(params, lr):
-    optimizer = Adam(params, lr)
-    # optimizer = SGD(params, lr)
+    # optimizer = Adam(params, lr)
+    optimizer = SGD(params, lr)
     return optimizer
 
 
@@ -179,10 +174,12 @@ class Experiment:
 
             tr_score_l = []
             te_score_l = []
+            accepted_l = []
             for _ in range(config.exps):
-                tr_rmse, te_rmse = self.run(self.train, self.test, level)
+                tr_rmse, te_rmse, accepted = self.run(self.train, self.test, level)
                 tr_score_l.append(tr_rmse)
                 te_score_l.append(te_rmse)
+                accepted_l.append(accepted)
 
             total_time = time.time() - t0
 
@@ -194,6 +191,7 @@ class Experiment:
                 print(
                     f"Test statistics: mean - {np.mean(te_score_l)}, std = {np.std(te_score_l)}, best = {np.amax(te_score_l)}"
                 )
+                print(f"Accept percentage: {np.mean(accepted_l)}")
             else:
                 print(
                     f"Training statistics: mean - {np.mean(tr_score_l)}, std = {np.std(tr_score_l)}, best = {np.amin(tr_score_l)}"
@@ -201,6 +199,7 @@ class Experiment:
                 print(
                     f"Test statistics: mean - {np.mean(te_score_l)}, std = {np.std(te_score_l)}, best = {np.amin(te_score_l)}"
                 )
+                print(f"Accept percentage: {np.mean(accepted_l)}")
             print(f"Total elapsed time: {total_time}")
 
     def langevin_gradient(self, model, x, y, w, optimizer):
@@ -265,6 +264,7 @@ class Experiment:
 
         best_w = w
         best_rmse = -1
+        accepted = 0
         for i in range(self.config.samples):
             lx = random.uniform(0, 1)
             if self.config.langevin_gradients and lx < self.config.lg_rate:
@@ -307,6 +307,7 @@ class Experiment:
 
             u = random.uniform(0, 1)
             if u < mh_prob:  # Accept
+                accepted += 1
                 log_lik = log_lik_proposal
                 prior_current = prior_prop
                 w = w_proposal
@@ -319,6 +320,8 @@ class Experiment:
                     best_w = w
 
         model.decode(best_w)
+
+        return accepted / self.config.samples * 100
 
     def train_backprop(self, net_ensemble, model, train_data):
         optimizer = get_optim(model.parameters(), config.lr)
@@ -360,6 +363,7 @@ class Experiment:
 
         final_tr_score = 0
         final_te_score = 0
+        accepted = 0
         for stage in range(num_nets):
 
             model = model_type.get_model(config)
@@ -367,7 +371,7 @@ class Experiment:
                 model.cuda()
 
             if config.mcmc:
-                self.train_mcmc(net_ensemble, model, train)
+                accepted += self.train_mcmc(net_ensemble, model, train)
             else:
                 self.train_backprop(net_ensemble, model, train)
 
@@ -399,7 +403,7 @@ class Experiment:
 
         # print(f"Stage: {num_nets}  RMSE@Tr: {tr_rmse:.5f}, final RMSE@Te: {te_rmse:.5f}")
 
-        return final_tr_score, final_te_score
+        return final_tr_score, final_te_score, accepted / num_nets
 
 
 if __name__ == "__main__":
