@@ -11,6 +11,7 @@ class MLP_1HL(nn.Module):
         self.in_layer = nn.Linear(dim_in, dim_hidden)
         self.out_layer = nn.Linear(dim_hidden, dim_out)
         self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=-1)
 
         self.top = (dim_in, dim_hidden, dim_out)
 

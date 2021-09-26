@@ -36,23 +36,26 @@ params:
   # Regression datasets
   # - sunspot
   # - rossler
-  data: "sunspot"
+  data: "ionosphere"
 
 
   lr: 0.01                  # Learning rate
   num_nets: 5               # Number of weak learners to train
   exps: 30                  # Number of experiments to run 
   cuda: true                # Use GPU
+  optimizer: adam           # "adam" or "sgd"
 
   # Train on multistep version on the problem
   # ( Only applies for timeseries regression problems )
   multistep: false
 
   # Options for MCMC sampling
-  mcmc: true                # Use MCMC, below options don't matter if false
+  mcmc: true
   samples: 5000             # Number of samples to generate
   langevin_gradients: true  # Use langevin gradients
   lg_rate: 0.5              # Rate for langevin gradients
+
+  plot_graphs: true         # Plot diagnostic graphs for MCMC
 ```
 
 ## Experiments

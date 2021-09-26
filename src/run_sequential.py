@@ -17,7 +17,7 @@ from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
-from utils import auc_score, init_gbnn, mse_torch, root_mse
+from utils import auc_score, gr_convergence_rate, init_gbnn, mse_torch, root_mse
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -57,10 +57,13 @@ def get_data(train_path, test_path, multistep=False, classification=False):
     return train, test
 
 
-def get_optim(params, lr):
-    optimizer = Adam(params, lr)
-    # optimizer = SGD(params, lr)
-    return optimizer
+def get_optim(params, config):
+    if config.optimizer == "adam":
+        return Adam(params, config.lr)
+    elif config.optimizer == "sgd":
+        return SGD(params, config.lr)
+    else:
+        raise ValueError("Invalid optimizer specified, choose adam or sgd.")
 
 
 class Experiment:
@@ -178,13 +181,20 @@ class Experiment:
             tr_score_l = []
             te_score_l = []
             accepted_l = []
+            all_chains = []
             for _ in range(config.exps):
-                tr_rmse, te_rmse, accepted = self.run(level)
+                tr_rmse, te_rmse, accepted, chains = self.run(level)
                 tr_score_l.append(tr_rmse)
                 te_score_l.append(te_rmse)
                 accepted_l.append(accepted)
+                all_chains.append(chains)
 
             total_time = time.time() - t0
+
+            # Compute convergence diagnostics
+            if self.config.mcmc:
+                converge_rate = gr_convergence_rate(all_chains, self.config)
+                print(converge_rate)
 
             print(f"Boosting level: {level}")
             if self.config.classification:
@@ -242,7 +252,7 @@ class Experiment:
 
     def train_mcmc(self, net_ensemble, model):
 
-        optimizer = get_optim(model.parameters(), self.config.lr)
+        optimizer = get_optim(model.parameters(), self.config)
         # net_ensemble.to_train()  # Set the models in ensemble net to train mode
 
         x, y = self.train.feat, self.train.label
@@ -257,7 +267,6 @@ class Experiment:
         out = net_ensemble.forward(x)
         grad_direction = -1 * self.g_func(y, out)
 
-        w = model.encode()
         w_size = (
             self.config.feat_d * self.config.hidden_d
             + self.config.hidden_d * self.config.out_d
@@ -266,16 +275,23 @@ class Experiment:
         )
 
         # Randomwalk Steps
-        step_w = 0.025
-        step_eta = 0.2
+        if self.config.classification:
+            step_w = self.config.step_w["classification"]
+        else:
+            step_w = self.config.step_w["regression"]
+
+        sigma_squared = step_w * 10
+        nu_1 = 0
+        nu_2 = 0
+        # step_eta = self.config.step_eta
+
+        w = model.encode()
+        # w = np.random.normal(0, sigma_squared, w_size)
+        # model.decode(w)
 
         pred_train = model.evaluate_proposal(x, w)
         eta = np.log(np.var((pred_train - grad_direction).cpu().numpy()))
         tau_pro = np.exp(eta)
-
-        sigma_squared = 25
-        nu_1 = 0
-        nu_2 = 0
 
         prior_current = self.prior_func(
             sigma_squared, nu_1, nu_2, w, tau_pro, self.config
@@ -292,6 +308,7 @@ class Experiment:
         best_rmse = -1
         best_log_likelihood = -1
         accepted = 0
+        chains = np.zeros((self.config.samples, w_size))
         for i in range(self.config.samples):
             lx = random.uniform(0, 1)
             if self.config.langevin_gradients and lx < self.config.lg_rate:
@@ -317,12 +334,15 @@ class Experiment:
             # eta_pro = eta + np.random.normal(0, step_eta, 1)
             tau_pro = np.exp(eta_pro)
 
-            log_lik_proposal, fx_train_prop = self.log_likelihood_func(
-                model, x, grad_direction, w_proposal, tau_pro
-            )
-            _, fx_test_prop = self.log_likelihood_func(
-                model, x_test, y_test, w_proposal, tau_sq=tau_pro
-            )
+            with torch.no_grad():
+                log_lik_proposal, fx_train_prop = self.log_likelihood_func(
+                    model, x, grad_direction, w_proposal, tau_pro
+                )
+
+                if self.config.plot_graphs:
+                    _, fx_test_prop = self.log_likelihood_func(
+                        model, x_test, y_test, w_proposal, tau_pro
+                    )
 
             prior_prop = self.prior_func(
                 sigma_squared, nu_1, nu_2, w_proposal, tau_pro, self.config
@@ -331,10 +351,12 @@ class Experiment:
             diff_prior = prior_prop - prior_current
             diff_likelihood = log_lik_proposal - log_lik
 
-            try:
-                mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
-            except OverflowError:
-                mh_prob = 1
+            # try:
+            #     mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
+            # except OverflowError:
+            #     mh_prob = 1
+
+            mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
 
             u = random.uniform(0, 1)
             if u < mh_prob:  # Accept
@@ -345,15 +367,18 @@ class Experiment:
 
                 eta = eta_pro
 
-                fx_train = fx_train_prop
-                fx_test = fx_test_prop
+                if self.config.plot_graphs:
+                    fx_train = fx_train_prop
+                    fx_test = fx_test_prop
 
                 temp = mse_torch(model, x, grad_direction)
                 if best_rmse == -1 or temp < best_rmse:
+                    # if log_lik > best_log_likelihood:
                     best_rmse = temp
                     best_w = w
                     best_log_likelihood = log_lik
 
+            chains[i] = w
             # Append diagnostic results
             if self.config.plot_graphs:
 
@@ -361,12 +386,17 @@ class Experiment:
                 self.tr_accs.append(self.compute_accuracy(fx_train, Fx_train, self.train))
                 self.te_accs.append(self.compute_accuracy(fx_test, Fx_test, self.test))
 
+        # model.decode(w)
         model.decode(best_w)
 
-        return accepted / self.config.samples * 100, best_log_likelihood
+        return (
+            accepted / self.config.samples * 100,
+            best_log_likelihood,
+            chains[self.config.burn_in :],  # Discard burn in samples
+        )
 
     def train_backprop(self, net_ensemble, model):
-        optimizer = get_optim(model.parameters(), config.lr)
+        optimizer = get_optim(model.parameters(), self.config)
         net_ensemble.to_train()  # Set the models in ensemble net to train mode
 
         for i, (x, y) in enumerate(self.train):
@@ -409,6 +439,8 @@ class Experiment:
         final_tr_score = 0
         final_te_score = 0
         accepted = 0
+
+        chains = None
         for stage in range(num_nets):
 
             model = model_type.get_model(config)
@@ -416,8 +448,9 @@ class Experiment:
                 model.cuda()
 
             log_likelihood = None
+
             if config.mcmc:
-                temp, log_likelihood = self.train_mcmc(net_ensemble, model)
+                temp, log_likelihood, chains = self.train_mcmc(net_ensemble, model)
                 accepted += temp
             else:
                 self.train_backprop(net_ensemble, model)
@@ -446,7 +479,7 @@ class Experiment:
         if self.config.mcmc and self.config.plot_graphs:
             self.save_plots(num_nets)
 
-        return final_tr_score, final_te_score, accepted / num_nets
+        return final_tr_score, final_te_score, accepted / num_nets, chains
 
     def save_plots(self, n):
         # Make folders

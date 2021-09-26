@@ -51,3 +51,29 @@ def init_gbnn(train):
 
     # probs[0] = torch.argmax(totals)
     return probs
+
+
+def gr_convergence_rate(chains, config):
+    # Formula taken from https://rlhick.people.wm.edu/stories/bayesian_5.html
+    # Chains shape is (M, N, weight_size)
+
+    N = config.samples - config.burn_in
+    M = config.exps
+
+    variances = []  # (M, weight_size)
+    means = []  # (M, weight_size)
+    for chain in chains:
+        variances.append(np.var(chain, axis=0))
+        means.append(np.mean(chain, axis=0))
+
+    W = np.mean(variances, axis=0)
+
+    g_mean = np.mean(means, axis=0)
+
+    B = N / (M - 1) * np.sum((means - g_mean) ** 2, axis=0)
+
+    var_hat = (1 - 1 / N) * W + 1 / N * B
+
+    scale_reduction = np.sqrt(var_hat / W)
+
+    return scale_reduction
