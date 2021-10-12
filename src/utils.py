@@ -54,26 +54,55 @@ def init_gbnn(train):
 
 
 def gr_convergence_rate(chains, config):
-    # Formula taken from https://rlhick.people.wm.edu/stories/bayesian_5.html
     # Chains shape is (M, N, weight_size)
 
-    N = config.samples - config.burn_in
-    M = config.exps
+    chains = np.array(chains)
 
-    variances = []  # (M, weight_size)
-    means = []  # (M, weight_size)
-    for chain in chains:
-        variances.append(np.var(chain, axis=0))
-        means.append(np.mean(chain, axis=0))
+    M, N, P = chains.shape
 
-    W = np.mean(variances, axis=0)
+    B_on_n = chains.mean(axis=1).var(axis=0)
+    W = chains.var(axis=1).mean(axis=0)
 
-    g_mean = np.mean(means, axis=0)
+    sig2 = N / (N - 1) * W + B_on_n
+    Vhat = sig2 + B_on_n / N
+    Rhat = Vhat / W
 
-    B = N / (M - 1) * np.sum((means - g_mean) ** 2, axis=0)
+    # return Rhat
 
-    var_hat = (1 - 1 / N) * W + 1 / N * B
+    si2 = chains.var(axis=1)
+    xi_bar = chains.mean(axis=1)
+    xi2_bar = chains.mean(axis=1) ** 2
+    var_si2 = chains.var(axis=1).var(axis=0)
+    allmean = chains.mean(axis=1).mean(axis=0)
+    cov_term1 = np.array([np.cov(si2[:, i], xi2_bar[:, i])[0, 1] for i in range(P)])
+    cov_term2 = np.array(
+        [-2 * allmean[i] * (np.cov(si2[:, i], xi_bar[:, i])[0, 1]) for i in range(P)]
+    )
+    var_Vhat = (
+        ((N - 1) / N) ** 2 * 1.0 / M * var_si2
+        + ((M + 1) / M) ** 2 * 2.0 / (M - 1) * B_on_n ** 2
+        + 2.0 * (M + 1) * (N - 1) / (M * N ** 2) * N / M * (cov_term1 + cov_term2)
+    )
+    df = 2 * Vhat ** 2 / var_Vhat
 
-    scale_reduction = np.sqrt(var_hat / W)
+    Rhat *= df / (df - 2)
 
-    return scale_reduction
+    return Rhat
+
+    # variances = []  # (M, weight_size)
+    # means = []  # (M, weight_size)
+    # for chain in chains:
+    #     variances.append(np.var(chain, axis=0))
+    #     means.append(np.mean(chain, axis=0))
+
+    # W = np.mean(variances, axis=0)
+
+    # g_mean = np.mean(means, axis=0)
+
+    # B = N / (M - 1) * np.sum((means - g_mean) ** 2, axis=0)
+
+    # var_hat = (1 - 1 / N) * W + 1 / N * B
+
+    # scale_reduction = np.sqrt(var_hat / W)
+
+    # return scale_reduction

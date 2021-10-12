@@ -2,18 +2,22 @@ params:
   # Classification datasets
   # - ionosphere
   # - cancer
+  # - bank
+  # - pendigit
   #
   # Regression datasets
   # - sunspot
   # - rossler
-  data: "sunspot"
+  # - henon
+  # - lazer
+  data: "pendigit"
 
 
-  lr: 0.01                  # Learning rate
+  lr: 0.1                  # Learning rate
   num_nets: 5               # Number of weak learners to train
   exps: 5                  # Number of experiments to run 
   cuda: true                # Use GPU
-  optimizer: adam           # "adam" or "sgd"
+  optimizer: sgd           # "adam" or "sgd"
 
   # Train on multistep version on the problem
   # ( Only applies for timeseries regression problems )
@@ -21,13 +25,13 @@ params:
 
   # Options for MCMC sampling
   mcmc: true
-  samples: 10000             # Number of samples to generate
-  burn_in: 5000             # Burn in samples
-  step_w:              # Variance for random walk weight steps, use 0.01 for classification and 0.0025 for regression
+  samples: 10000                  # Number of samples to generate
+  burn_in: 5000                   # Burn in samples
+  step_w:                         # Variance for random walk weight steps, use 0.01 for classification and 0.0025 for regression
     classification: 0.01
-    regression: 0.0025
+    regression: 0.0025            # Use 0.01 for multistep
   #step_eta: 0.0025               # Use 0.0025?
-  langevin_gradients: true  # Use langevin gradients
-  lg_rate: 0.2              # Rate for langevin gradients
+  langevin_gradients: true        # Use langevin gradients
+  lg_rate: 0.2                    # Rate for langevin gradients
 
-  plot_graphs: true        # Plot diagnostic graphs for MCMC
+  plot_graphs: false              # Plot diagnostic graphs for MCMC

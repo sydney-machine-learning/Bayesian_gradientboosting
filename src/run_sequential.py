@@ -83,7 +83,6 @@ class Experiment:
             else:
                 train_path = "datasets/Sunspot/train.txt"
                 test_path = "datasets/Sunspot/test.txt"
-            config.hidden_d = 10
         elif config.data == "rossler":
             if self.config.multistep:
                 train_path = "datasets/Rossler/train1.csv"
@@ -91,8 +90,20 @@ class Experiment:
             else:
                 train_path = "datasets/Rossler/train.txt"
                 test_path = "datasets/Rossler/test.txt"
-
-            config.hidden_d = 10
+        elif config.data == "henon":
+            if self.config.multistep:
+                train_path = "datasets/Henon/train1.csv"
+                test_path = "datasets/Henon/test1.csv"
+            else:
+                train_path = "datasets/Henon/train.txt"
+                test_path = "datasets/Henon/test.txt"
+        elif config.data == "lazer":
+            if self.config.multistep:
+                train_path = "datasets/Lazer/train1.csv"
+                test_path = "datasets/Lazer/test1.csv"
+            else:
+                train_path = "datasets/Lazer/train.txt"
+                test_path = "datasets/Lazer/test.txt"
         elif config.data == "ionosphere":
             train_path = "datasets/Ionosphere/ftrain.csv"
             test_path = "datasets/Ionosphere/ftest.csv"
@@ -107,6 +118,20 @@ class Experiment:
             config.feat_d = 9
             config.hidden_d = 12
             config.out_d = 2
+        elif config.data == "bank":
+            train_path = "datasets/Bank/train.csv"
+            test_path = "datasets/Bank/test.csv"
+
+            config.feat_d = 51
+            config.hidden_d = 90
+            config.out_d = 2
+        elif config.data == "pendigit":
+            train_path = "datasets/PenDigit/train.csv"
+            test_path = "datasets/PenDigit/test.csv"
+
+            config.feat_d = 16
+            config.hidden_d = 30
+            config.out_d = 10
         else:
             raise ValueError("Invalid dataset specified")
 
@@ -115,18 +140,25 @@ class Experiment:
         )
 
     def init_experiment(self):
-        if self.config.data in ["sunspot", "rossler"]:  # Regression problems
+        if self.config.data in ["sunspot", "rossler", "henon", "lazer"]:  # Regression problems
             if self.config.multistep:
                 self.config.feat_d = 5
                 self.config.out_d = 10
+                self.config.hidden_d = 10
             else:
                 self.config.feat_d = 4
                 self.config.out_d = 1
+                self.config.hidden_d = 10
 
             self.load_data()
             self.init_regression()
             self.config.classification = False
-        elif self.config.data in ["ionosphere", "cancer"]:  # Classification problem
+        elif self.config.data in [
+            "ionosphere",
+            "cancer",
+            "bank",
+            "pendigit",
+        ]:  # Classification problem
             self.load_data(classification=True)
             self.init_classification()
             self.config.classification = True
@@ -183,6 +215,7 @@ class Experiment:
             accepted_l = []
             all_chains = []
             for _ in range(config.exps):
+
                 tr_rmse, te_rmse, accepted, chains = self.run(level)
                 tr_score_l.append(tr_rmse)
                 te_score_l.append(te_rmse)
@@ -194,7 +227,7 @@ class Experiment:
             # Compute convergence diagnostics
             if self.config.mcmc:
                 converge_rate = gr_convergence_rate(all_chains, self.config)
-                print(converge_rate)
+                # print(converge_rate)
 
             print(f"Boosting level: {level}")
             if self.config.classification:
@@ -285,9 +318,9 @@ class Experiment:
         nu_2 = 0
         # step_eta = self.config.step_eta
 
-        w = model.encode()
-        # w = np.random.normal(0, sigma_squared, w_size)
-        # model.decode(w)
+        # w = model.encode()
+        w = np.random.normal(0, sigma_squared, w_size)
+        model.decode(w)
 
         pred_train = model.evaluate_proposal(x, w)
         eta = np.log(np.var((pred_train - grad_direction).cpu().numpy()))
@@ -310,6 +343,11 @@ class Experiment:
         accepted = 0
         chains = np.zeros((self.config.samples, w_size))
         for i in range(self.config.samples):
+
+            # Transition to SGD after burn in
+            if i == self.config.burn_in:
+                optimizer = SGD(model.parameters(), self.config.lr)
+
             lx = random.uniform(0, 1)
             if self.config.langevin_gradients and lx < self.config.lg_rate:
                 w_gd = self.langevin_gradient(model, x, grad_direction, w, optimizer)
@@ -352,11 +390,16 @@ class Experiment:
             diff_likelihood = log_lik_proposal - log_lik
 
             # try:
-            #     mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
+            #     mh_prob = min(1, math.exp())
             # except OverflowError:
             #     mh_prob = 1
+            temp = diff_likelihood + diff_prior + diff_prop
+            if temp > 0:
+                mh_prob = 1
+            else:
+                mh_prob = math.exp(temp)
 
-            mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
+            # mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
 
             u = random.uniform(0, 1)
             if u < mh_prob:  # Accept
@@ -371,9 +414,9 @@ class Experiment:
                     fx_train = fx_train_prop
                     fx_test = fx_test_prop
 
-                temp = mse_torch(model, x, grad_direction)
+                # temp = mse_torch(model, x, grad_direction)
+                temp = self.loss_func(fx_train_prop, grad_direction)
                 if best_rmse == -1 or temp < best_rmse:
-                    # if log_lik > best_log_likelihood:
                     best_rmse = temp
                     best_w = w
                     best_log_likelihood = log_lik
@@ -386,7 +429,6 @@ class Experiment:
                 self.tr_accs.append(self.compute_accuracy(fx_train, Fx_train, self.train))
                 self.te_accs.append(self.compute_accuracy(fx_test, Fx_test, self.test))
 
-        # model.decode(w)
         model.decode(best_w)
 
         return (
@@ -442,6 +484,9 @@ class Experiment:
 
         chains = None
         for stage in range(num_nets):
+
+            # self.config.step_w["classification"] *= 0.5
+            # self.config.step_w["regression"] *= 0.5
 
             model = model_type.get_model(config)
             if config.cuda:
