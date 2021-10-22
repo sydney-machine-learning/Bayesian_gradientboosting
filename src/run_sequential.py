@@ -4,6 +4,7 @@ import time
 from multiprocessing import Value
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,7 +18,14 @@ from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
-from utils import auc_score, gr_convergence_rate, init_gbnn, mse_torch, root_mse
+from utils import (
+    auc_score,
+    classification_score,
+    gr_convergence_rate,
+    init_gbnn,
+    mse_torch,
+    root_mse,
+)
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -28,7 +36,11 @@ class Config:
         self.__dict__.update(entries)
 
 
-config = Config(**data["params"])
+config = Config(**data)
+if config.mcmc:
+    config.params = Config(**config.mcmc_params)
+else:
+    config.params = Config(**config.backprop_params)
 
 
 def get_data_help(path, config, index_col=None):
@@ -58,10 +70,10 @@ def get_data(train_path, test_path, multistep=False, classification=False):
 
 
 def get_optim(params, config):
-    if config.optimizer == "adam":
-        return Adam(params, config.lr)
-    elif config.optimizer == "sgd":
-        return SGD(params, config.lr)
+    if config.params.optimizer == "adam":
+        return Adam(params, config.params.lr)
+    elif config.params.optimizer == "sgd":
+        return SGD(params, config.params.lr)
     else:
         raise ValueError("Invalid optimizer specified, choose adam or sgd.")
 
@@ -190,7 +202,8 @@ class Experiment:
         self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
 
         self.loss_func = nn.MSELoss()
-        self.acc_func = auc_score
+        # self.acc_func = auc_score
+        self.acc_func = classification_score
 
         self.log_likelihood_func = Regression.log_likelihood
         self.prior_func = Regression.prior_likelihood
@@ -202,6 +215,7 @@ class Experiment:
         Runs the full experiment and prints out accuracy statistics after each stage (boosting level).
         """
 
+        # Plot all diagnostic graphs
         if self.config.plot_graphs:
             self.run(self.config.num_nets)
             return
@@ -210,24 +224,23 @@ class Experiment:
 
             t0 = time.time()
 
-            tr_score_l = []
-            te_score_l = []
-            accepted_l = []
-            all_chains = []
-            for _ in range(config.exps):
+            if config.mcmc:
+                tr_score_l, te_score_l, accepted, chains = self.run(level)
+            else:
+                tr_score_l = []
+                te_score_l = []
+                for _ in range(config.params.exps):
 
-                tr_rmse, te_rmse, accepted, chains = self.run(level)
-                tr_score_l.append(tr_rmse)
-                te_score_l.append(te_rmse)
-                accepted_l.append(accepted)
-                all_chains.append(chains)
+                    tr_score, te_score, _, _ = self.run(level)
+                    tr_score_l.append(tr_score)
+                    te_score_l.append(te_score)
 
             total_time = time.time() - t0
 
             # Compute convergence diagnostics
-            if self.config.mcmc:
-                converge_rate = gr_convergence_rate(all_chains, self.config)
-                # print(converge_rate)
+            # if self.config.mcmc:
+            # converge_rate = gr_convergence_rate(all_chains, self.config)
+            # print(converge_rate)
 
             print(f"Boosting level: {level}")
             if self.config.classification:
@@ -237,7 +250,8 @@ class Experiment:
                 print(
                     f"Test statistics: mean - {np.mean(te_score_l)}, std = {np.std(te_score_l)}, best = {np.amax(te_score_l)}"
                 )
-                print(f"Accept percentage: {np.mean(accepted_l)}")
+                if config.mcmc:
+                    print(f"Accept percentage: {accepted}")
             else:
                 print(
                     f"Training statistics: mean - {np.mean(tr_score_l)}, std = {np.std(tr_score_l)}, best = {np.amin(tr_score_l)}"
@@ -245,7 +259,8 @@ class Experiment:
                 print(
                     f"Test statistics: mean - {np.mean(te_score_l)}, std = {np.std(te_score_l)}, best = {np.amin(te_score_l)}"
                 )
-                print(f"Accept percentage: {np.mean(accepted_l)}")
+                if config.mcmc:
+                    print(f"Accept percentage: {accepted}")
             print(f"Total elapsed time: {total_time}")
 
     def langevin_gradient(self, model, x, y, w, optimizer):
@@ -281,7 +296,7 @@ class Experiment:
             pred = Fx + gamma * fx
             ret = self.acc_func(None, data, out=pred.cpu().numpy())
 
-            return ret
+            return ret, pred
 
     def train_mcmc(self, net_ensemble, model):
 
@@ -309,9 +324,9 @@ class Experiment:
 
         # Randomwalk Steps
         if self.config.classification:
-            step_w = self.config.step_w["classification"]
+            step_w = self.config.params.step_w["classification"]
         else:
-            step_w = self.config.step_w["regression"]
+            step_w = self.config.params.step_w["regression"]
 
         sigma_squared = step_w * 10
         nu_1 = 0
@@ -341,15 +356,12 @@ class Experiment:
         best_rmse = -1
         best_log_likelihood = -1
         accepted = 0
-        chains = np.zeros((self.config.samples, w_size))
-        for i in range(self.config.samples):
-
-            # Transition to SGD after burn in
-            if i == self.config.burn_in:
-                optimizer = SGD(model.parameters(), self.config.lr)
+        chains = np.zeros((self.config.params.samples - self.config.params.burn_in, w_size))
+        Fx_test_samples = np.zeros((self.config.params.samples, y_test.shape[0], y_test.shape[1]))
+        for i in range(self.config.params.samples):
 
             lx = random.uniform(0, 1)
-            if self.config.langevin_gradients and lx < self.config.lg_rate:
+            if self.config.params.langevin_gradients and lx < self.config.params.lg_rate:
                 w_gd = self.langevin_gradient(model, x, grad_direction, w, optimizer)
                 w_proposal = np.random.normal(w_gd, step_w, w_size)
                 w_prop_gd = self.langevin_gradient(model, x, grad_direction, w_proposal, optimizer)
@@ -389,17 +401,11 @@ class Experiment:
             diff_prior = prior_prop - prior_current
             diff_likelihood = log_lik_proposal - log_lik
 
-            # try:
-            #     mh_prob = min(1, math.exp())
-            # except OverflowError:
-            #     mh_prob = 1
             temp = diff_likelihood + diff_prior + diff_prop
             if temp > 0:
                 mh_prob = 1
             else:
                 mh_prob = math.exp(temp)
-
-            # mh_prob = min(1, math.exp(diff_likelihood + diff_prior + diff_prop))
 
             u = random.uniform(0, 1)
             if u < mh_prob:  # Accept
@@ -421,20 +427,30 @@ class Experiment:
                     best_w = w
                     best_log_likelihood = log_lik
 
-            chains[i] = w
+            if i >= self.config.params.burn_in:
+                chains[i - self.config.params.burn_in] = w
+
             # Append diagnostic results
             if self.config.plot_graphs:
 
+                acc_tr, _ = self.compute_accuracy(fx_train, Fx_train, self.train)
+                acc_te, pred_te = self.compute_accuracy(fx_test, Fx_test, self.test)
+                # if i >= self.config.burn_in:
+                Fx_test_samples[i] = pred_te.cpu().numpy()
+
                 self.likelihoods.append(log_lik)
-                self.tr_accs.append(self.compute_accuracy(fx_train, Fx_train, self.train))
-                self.te_accs.append(self.compute_accuracy(fx_test, Fx_test, self.test))
+
+                self.tr_accs.append(acc_tr)
+                self.te_accs.append(acc_te)
 
         model.decode(best_w)
 
+        self.Fx_test_l.append(Fx_test_samples)
+
         return (
-            accepted / self.config.samples * 100,
+            accepted / self.config.params.samples * 100,
             best_log_likelihood,
-            chains[self.config.burn_in :],  # Discard burn in samples
+            chains,
         )
 
     def train_backprop(self, net_ensemble, model):
@@ -471,13 +487,14 @@ class Experiment:
         """
         model_type = MLP_1HL
 
-        net_ensemble = EnsembleNet(self.c0, self.config.lr)
+        self.net_ensemble = EnsembleNet(self.c0, self.config.params.lr)
 
         self.train.shuffle()
 
         self.likelihoods = []
         self.tr_accs = []
         self.te_accs = []
+        self.Fx_test_l = []
         final_tr_score = 0
         final_te_score = 0
         accepted = 0
@@ -495,30 +512,30 @@ class Experiment:
             log_likelihood = None
 
             if config.mcmc:
-                temp, log_likelihood, chains = self.train_mcmc(net_ensemble, model)
+                temp, log_likelihood, chains = self.train_mcmc(self.net_ensemble, model)
                 accepted += temp
             else:
-                self.train_backprop(net_ensemble, model)
+                self.train_backprop(self.net_ensemble, model)
 
             # Calculate gamma
             x = torch.tensor(self.train.feat, dtype=torch.float32).cuda()
             y = torch.tensor(self.train.label, dtype=torch.float32).cuda()
 
             fx = model(x)
-            Fx = net_ensemble.forward(x)
+            Fx = self.net_ensemble.forward(x)
             Fx = torch.as_tensor(Fx, dtype=torch.float32).cuda()
 
             gamma = self.lambda_func(y, fx, Fx)
             # print(gamma)
 
-            net_ensemble.add(model, gamma, log_likelihood=log_likelihood)
+            self.net_ensemble.add(model, gamma, log_likelihood=log_likelihood)
 
             if config.cuda:
-                net_ensemble.to_cuda()
-            net_ensemble.to_eval()  # Set the models in ensemble net to eval mode
+                self.net_ensemble.to_cuda()
+            self.net_ensemble.to_eval()  # Set the models in ensemble net to eval mode
 
-            final_tr_score = self.acc_func(net_ensemble, self.train)
-            final_te_score = self.acc_func(net_ensemble, self.test)
+            final_tr_score = self.acc_func(self.net_ensemble, self.train)
+            final_te_score = self.acc_func(self.net_ensemble, self.test)
 
         # Plot results
         if self.config.mcmc and self.config.plot_graphs:
@@ -531,9 +548,15 @@ class Experiment:
         path = f"plots/{self.config.data}/"
         Path(path).mkdir(parents=True, exist_ok=True)
 
+        # Font size
+        matplotlib.rcParams.update({"font.size": 14})
+        # plt.ticklabel_format(style='sci', axis='x', scilimits=(0,0))
+
         # Likelihoods for all weak learners
         for i in range(n):
             plt.figure()
+            plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
+
             plt.plot(
                 list(range(1, self.config.samples + 1)),
                 self.likelihoods[i * self.config.samples : (i + 1) * self.config.samples],
@@ -544,6 +567,7 @@ class Experiment:
 
         # Training acc
         plt.figure()
+        plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
         plt.plot(
             list(range(1, self.config.samples * n + 1)), self.tr_accs,
         )
@@ -554,6 +578,7 @@ class Experiment:
         # Test acc
         # Training acc
         plt.figure()
+        plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
         plt.plot(
             list(range(1, self.config.samples * n + 1)), self.te_accs,
         )
@@ -561,10 +586,45 @@ class Experiment:
         plt.ylabel("Test score")
         plt.savefig(path + f"test_scores.png")
 
+        if self.config.classification:
+            return
+
+        x_test = np.linspace(1, len(self.test.label), num=len(self.test.label))
+        for i in range(len(self.Fx_test_l)):
+            Fx_test = self.Fx_test_l[i]
+            # Uncertainty graphs
+            fx_mu = Fx_test.mean(axis=0).squeeze()
+            fx_high = np.percentile(Fx_test, 99.5, axis=0).squeeze()
+            fx_low = np.percentile(Fx_test, 0.5, axis=0).squeeze()
+
+            plt.figure()
+            # plt.plot(x_test, fx_low, "w", label="pred. (2.5 percen.)")
+            # plt.plot(x_test, fx_high, "w", label="pred. (97.5 percen.)")
+            plt.fill_between(
+                x_test, fx_low, fx_high, facecolor="b", alpha=0.5, label="pred. (99 percen.)"
+            )
+            plt.plot(x_test, self.test.label, "r", label="actual", linewidth=0.5)
+            plt.plot(x_test, fx_mu, "b", label="pred. (mean)", linewidth=0.5)
+
+            plt.legend(loc="upper right")
+            plt.xlabel("Time")
+            plt.ylabel("Prediction")
+            plt.savefig(path + f"uncertainty_{i}.png")
+
 
 if __name__ == "__main__":
 
-    exp = Experiment(config)
-    exp.init_experiment()
-    exp.run_experiment()
+    if config.plot_graphs:
 
+        # config.mcmc = False
+        # exp_backprop = Experiment(config).init_experiment()
+        # exp_backprop.run(config.num_nets)
+
+        # config.mcmc = True
+        exp_mcmc = Experiment(config)
+        exp_mcmc.init_experiment()
+        exp_mcmc.run(config.num_nets)
+    else:
+        exp = Experiment(config)
+        exp.init_experiment()
+        exp.run_experiment()
