@@ -14,7 +14,9 @@ num_nets: 5               # Number of weak learners to train
 cuda: true                # Use GPU
 
 # Options for MCMC sampling
-mcmc: false
+mcmc: true
+simultaneous: true
+parallel_tempering: true
 
 # Train on multistep version on the problem
 # ( Only applies for timeseries regression problems )
@@ -24,7 +26,7 @@ plot_graphs: false              # Plot diagnostic graphs for MCMC
 
 backprop_params:
   lr: 0.01                  # Learning rate
-  exps: 5                   # Number of experiments to run 
+  exps: 30                   # Number of experiments to run 
   optimizer: adam           # "adam" or "sgd"
 
 mcmc_params:
@@ -38,3 +40,10 @@ mcmc_params:
   #step_eta: 0.0025               # Use 0.0025?
   langevin_gradients: true        # Use langevin gradients
   lg_rate: 0.2                    # Rate for langevin gradients
+
+  # Parallel tempering parameters
+  num_chains: 10
+  swap_ratio: 0.02
+  swap_interval: 20               # int(swap_ratio*num_samples/num_chains)
+  maxtemp: 10
+  geometric: true

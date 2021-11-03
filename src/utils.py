@@ -3,6 +3,16 @@ import torch
 import torch.nn as nn
 from scipy.special import softmax
 from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score
+from torch.optim import SGD, Adam
+
+
+def get_optim(params, config):
+    if config.params.optimizer == "adam":
+        return Adam(params, config.params.lr)
+    elif config.params.optimizer == "sgd":
+        return SGD(params, config.params.lr)
+    else:
+        raise ValueError("Invalid optimizer specified, choose adam or sgd.")
 
 
 def mse_torch(model, x, y):

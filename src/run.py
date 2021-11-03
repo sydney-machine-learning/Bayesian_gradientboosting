@@ -12,20 +12,14 @@ import yaml
 from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.autograd import grad
-from torch.optim import SGD, Adam
 
 from data.data import LibCSVData, LibTXTData
 from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
-from utils import (
-    auc_score,
-    classification_score,
-    gr_convergence_rate,
-    init_gbnn,
-    mse_torch,
-    root_mse,
-)
+from parallel_tempering import ParallelTempering
+from utils import (auc_score, classification_score, get_optim,
+                   gr_convergence_rate, init_gbnn, mse_torch, root_mse)
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -67,15 +61,6 @@ def get_data(train_path, test_path, multistep=False, classification=False):
     test.feat = scaler.transform(test.feat)
 
     return train, test
-
-
-def get_optim(params, config):
-    if config.params.optimizer == "adam":
-        return Adam(params, config.params.lr)
-    elif config.params.optimizer == "sgd":
-        return SGD(params, config.params.lr)
-    else:
-        raise ValueError("Invalid optimizer specified, choose adam or sgd.")
 
 
 class Experiment:
@@ -178,8 +163,8 @@ class Experiment:
             raise ValueError("Invalid dataset specified")
 
     def init_regression(self):
-        self.g_func = lambda y, yhat: 2 * (yhat - y)
-        self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
+        self.g_func = Regression.g_func
+        self.lambda_func = Regression.lambda_func
         self.loss_func = nn.MSELoss()
         self.acc_func = root_mse
 
@@ -198,8 +183,8 @@ class Experiment:
         #     -1 / fx * self.g_func(y, Fx) / self.h_func(y, Fx)
         # )
 
-        self.g_func = lambda y, yhat: 2 * (yhat - y)
-        self.lambda_func = lambda y, fx, Fx: torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
+        self.g_func = Regression.g_func
+        self.lambda_func = Regression.lambda_func
 
         self.loss_func = nn.MSELoss()
         # self.acc_func = auc_score
@@ -217,7 +202,7 @@ class Experiment:
 
         # Plot all diagnostic graphs
         if self.config.plot_graphs:
-            self.run(self.config.num_nets)
+            self.run_sequential(self.config.num_nets)
             return
 
         for level in range(1, config.num_nets + 1):
@@ -225,13 +210,21 @@ class Experiment:
             t0 = time.time()
 
             if config.mcmc:
-                tr_score_l, te_score_l, accepted, chains = self.run(level)
+                if config.parallel_tempering:
+                    pt = ParallelTempering(self, self.config, level)
+                    pt.init_directories()
+                    pt.init_chains()
+                    tr_score_l, te_score_l, accepted, chains = pt.run_chains()
+                elif config.simultaneous:
+                    tr_score_l, te_score_l, accepted, chains = self.run_simultaneous(level)
+                else:
+                    tr_score_l, te_score_l, accepted, chains = self.run_sequential(level)
             else:
                 tr_score_l = []
                 te_score_l = []
                 for _ in range(config.params.exps):
 
-                    tr_score, te_score, _, _ = self.run(level)
+                    tr_score, te_score, _, _ = self.run_sequential(level)
                     tr_score_l.append(tr_score)
                     te_score_l.append(te_score)
 
@@ -357,7 +350,10 @@ class Experiment:
         best_log_likelihood = -1
         accepted = 0
         chains = np.zeros((self.config.params.samples - self.config.params.burn_in, w_size))
-        Fx_test_samples = np.zeros((self.config.params.samples, y_test.shape[0], y_test.shape[1]))
+        Fx_test_samples = torch.zeros(
+            (self.config.params.samples, y_test.shape[0], y_test.shape[1])
+        )
+        likelihoods = np.zeros((self.config.params.samples))
         for i in range(self.config.params.samples):
 
             lx = random.uniform(0, 1)
@@ -389,10 +385,9 @@ class Experiment:
                     model, x, grad_direction, w_proposal, tau_pro
                 )
 
-                if self.config.plot_graphs:
-                    _, fx_test_prop = self.log_likelihood_func(
-                        model, x_test, y_test, w_proposal, tau_pro
-                    )
+                _, fx_test_prop = self.log_likelihood_func(
+                    model, x_test, y_test, w_proposal, tau_pro
+                )
 
             prior_prop = self.prior_func(
                 sigma_squared, nu_1, nu_2, w_proposal, tau_pro, self.config
@@ -416,9 +411,8 @@ class Experiment:
 
                 eta = eta_pro
 
-                if self.config.plot_graphs:
-                    fx_train = fx_train_prop
-                    fx_test = fx_test_prop
+                fx_train = fx_train_prop
+                fx_test = fx_test_prop
 
                 # temp = mse_torch(model, x, grad_direction)
                 temp = self.loss_func(fx_train_prop, grad_direction)
@@ -431,19 +425,20 @@ class Experiment:
                 chains[i - self.config.params.burn_in] = w
 
             # Append diagnostic results
-            if self.config.plot_graphs:
+            # if self.config.plot_graphs:
 
-                acc_tr, _ = self.compute_accuracy(fx_train, Fx_train, self.train)
-                acc_te, pred_te = self.compute_accuracy(fx_test, Fx_test, self.test)
-                # if i >= self.config.burn_in:
-                Fx_test_samples[i] = pred_te.cpu().numpy()
+            acc_tr, _ = self.compute_accuracy(fx_train, Fx_train, self.train)
+            acc_te, pred_te = self.compute_accuracy(fx_test, Fx_test, self.test)
+            # if i >= self.config.burn_in:
+            Fx_test_samples[i] = pred_te.cpu().numpy()
 
-                self.likelihoods.append(log_lik)
+            likelihoods[i] = log_lik
 
-                self.tr_accs.append(acc_tr)
-                self.te_accs.append(acc_te)
+            self.tr_accs.append(acc_tr)
+            self.te_accs.append(acc_te)
 
         model.decode(best_w)
+        self.likelihoods.append(likelihoods)
 
         self.Fx_test_l.append(Fx_test_samples)
 
@@ -473,7 +468,7 @@ class Experiment:
             loss.backward()
             optimizer.step()
 
-    def run(self, num_nets):
+    def run_sequential(self, num_nets):
         """
         Run one instance of the experiment
 
@@ -528,7 +523,7 @@ class Experiment:
             gamma = self.lambda_func(y, fx, Fx)
             # print(gamma)
 
-            self.net_ensemble.add(model, gamma, log_likelihood=log_likelihood)
+            self.net_ensemble.add(model, gamma)
 
             if config.cuda:
                 self.net_ensemble.to_cuda()
@@ -541,7 +536,201 @@ class Experiment:
         if self.config.mcmc and self.config.plot_graphs:
             self.save_plots(num_nets)
 
-        return final_tr_score, final_te_score, accepted / num_nets, chains
+        if self.config.mcmc:
+            return (
+                self.tr_accs[-(self.config.params.samples - self.config.params.burn_in) :],
+                self.te_accs[-(self.config.params.samples - self.config.params.burn_in) :],
+                accepted / num_nets,
+                chains,
+            )
+        else:
+            return final_tr_score, final_te_score, accepted / num_nets, chains
+
+    def run_simultaneous(self, num_nets):
+
+        model_type = MLP_1HL
+
+        self.net_ensemble = EnsembleNet(self.c0, self.config.params.lr)
+        self.train.shuffle()
+
+        x, y = self.train.feat, self.train.label
+        x_test, y_test = self.test.feat, self.test.label
+        if config.cuda:
+            x = torch.as_tensor(x, dtype=torch.float32).cuda()
+            y = torch.as_tensor(y, dtype=torch.float32).cuda()
+
+            x_test = torch.as_tensor(x_test, dtype=torch.float32).cuda()
+            y_test = torch.as_tensor(y_test, dtype=torch.float32).cuda()
+
+        out = self.net_ensemble.forward(x)
+        grad_direction = -1 * self.g_func(y, out)
+
+        w_size = (
+            self.config.feat_d * self.config.hidden_d
+            + self.config.hidden_d * self.config.out_d
+            + self.config.hidden_d
+            + self.config.out_d
+        )
+
+        # Randomwalk Steps
+        if self.config.classification:
+            step_w = self.config.params.step_w["classification"]
+        else:
+            step_w = self.config.params.step_w["regression"]
+
+        sigma_squared = step_w * 10
+        nu_1 = 0
+        nu_2 = 0
+        # step_eta = self.config.step_eta
+
+        # Initialize weights for all models
+        model_weights = np.zeros((num_nets, w_size))
+        models = []
+        eta_list = np.zeros((num_nets))
+        prior_list = np.zeros((num_nets))
+        self.likelihoods = np.zeros((num_nets, self.config.params.samples + 1))
+        fx_train_list = torch.zeros((num_nets, len(y), self.config.out_d)).cuda()
+        fx_test_list = torch.zeros((num_nets, len(y_test), self.config.out_d)).cuda()
+        self.Fx_test_l = torch.zeros(
+            (num_nets, self.config.params.samples, len(y_test), self.config.out_d)
+        ).cuda()
+
+        self.tr_accs = []
+        self.te_accs = []
+        for i in range(num_nets):
+            model_weights[i] = np.random.normal(0, sigma_squared, w_size)
+            model = model_type.get_model(self.config)
+            if config.cuda:
+                model.cuda()
+            model.decode(model_weights[i])
+            models.append(model)
+
+            pred_train = model.evaluate_proposal(x, model_weights[i])
+            eta_list[i] = np.log(np.var((pred_train - grad_direction).cpu().numpy()))
+            tau_pro = np.exp(eta_list[i])
+
+            prior_list[i] = self.prior_func(
+                sigma_squared, nu_1, nu_2, model_weights[i], tau_pro, self.config
+            )  # takes care of the gradients
+
+            self.likelihoods[i][0], fx_train = self.log_likelihood_func(
+                model, x, grad_direction, model_weights[i], tau_sq=tau_pro
+            )
+            _, fx_test = self.log_likelihood_func(
+                model, x_test, y_test, model_weights[i], tau_sq=tau_pro
+            )
+
+        accepted = 0
+        chains = np.zeros((self.config.params.samples - self.config.params.burn_in, w_size))
+        for i in range(self.config.params.samples):
+
+            self.net_ensemble.reset()
+            with torch.no_grad():
+                Fx_train = torch.as_tensor(
+                    self.net_ensemble.forward(x), dtype=torch.float32
+                ).cuda()
+                Fx_test = torch.as_tensor(
+                    self.net_ensemble.forward(x_test), dtype=torch.float32
+                ).cuda()
+
+            for j in range(num_nets):
+
+                out = self.net_ensemble.forward(x)
+                grad_direction = -1 * self.g_func(y, out)
+
+                model = models[j]
+                w = model_weights[j]
+                optimizer = get_optim(model.parameters(), self.config)
+
+                lx = random.uniform(0, 1)
+                if self.config.params.langevin_gradients and lx < self.config.params.lg_rate:
+                    w_gd = self.langevin_gradient(model, x, grad_direction, w, optimizer)
+                    w_proposal = np.random.normal(w_gd, step_w, w_size)
+                    w_prop_gd = self.langevin_gradient(
+                        model, x, grad_direction, w_proposal, optimizer
+                    )
+
+                    wc_delta = w - w_prop_gd
+                    wp_delta = w_proposal - w_gd
+
+                    sigma_sq = step_w
+
+                    first = -0.5 * np.sum(wc_delta ** 2) / sigma_sq
+                    second = -0.5 * np.sum(wp_delta ** 2) / sigma_sq
+
+                    diff_prop = first - second
+                else:
+                    diff_prop = 0
+                    w_proposal = np.random.normal(w, step_w, w_size)
+
+                # Fix eta
+                eta_pro = eta_list[j]
+                # eta_pro = eta + np.random.normal(0, step_eta, 1)
+                tau_pro = np.exp(eta_pro)
+
+                with torch.no_grad():
+                    log_lik_proposal, fx_train_prop = self.log_likelihood_func(
+                        model, x, grad_direction, w_proposal, tau_pro
+                    )
+
+                    _, fx_test_prop = self.log_likelihood_func(
+                        model, x_test, y_test, w_proposal, tau_pro
+                    )
+
+                prior_prop = self.prior_func(
+                    sigma_squared, nu_1, nu_2, w_proposal, tau_pro, self.config
+                )  # takes care of the gradients
+
+                diff_prior = prior_prop - prior_list[j]
+                diff_likelihood = log_lik_proposal - self.likelihoods[j][i]
+
+                temp = diff_likelihood + diff_prior + diff_prop
+                if temp > 0:
+                    mh_prob = 1
+                else:
+                    mh_prob = math.exp(temp)
+
+                u = random.uniform(0, 1)
+                if u < mh_prob:  # Accept
+                    accepted += 1
+                    self.likelihoods[j][i + 1] = log_lik_proposal
+                    prior_list[j] = prior_prop
+                    model_weights[j] = w_proposal
+                    eta_list[j] = eta_pro
+                    fx_train_list[j] = fx_train_prop
+                    fx_test_list[j] = fx_test_prop
+                else:
+                    self.likelihoods[j][i + 1] = self.likelihoods[j][i]
+
+                if i >= self.config.params.burn_in:
+                    chains[i - self.config.params.burn_in] = w
+
+                acc_tr, _ = self.compute_accuracy(fx_train_list[j], Fx_train, self.train)
+                acc_te, pred_te = self.compute_accuracy(fx_test_list[j], Fx_test, self.test)
+
+                if j == num_nets - 1:
+                    self.tr_accs.append(acc_tr)
+                    self.te_accs.append(acc_te)
+
+                # Add model to the ensemble
+                gamma = self.lambda_func(y, fx_train_list[j], Fx_train)
+
+                self.net_ensemble.add(model, gamma)
+
+                Fx_train += gamma * fx_train_list[j]
+                Fx_test += gamma * fx_test_list[j]
+
+                self.Fx_test_l[j][i] = Fx_test
+
+        if self.config.plot_graphs:
+            self.save_plots(num_nets)
+
+        return (
+            self.tr_accs[-(self.config.params.samples - self.config.params.burn_in) :],
+            self.te_accs[-(self.config.params.samples - self.config.params.burn_in) :],
+            accepted / (self.config.params.samples * num_nets) * 100,
+            chains,
+        )
 
     def save_plots(self, n):
         # Make folders
@@ -558,8 +747,7 @@ class Experiment:
             plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
 
             plt.plot(
-                list(range(1, self.config.samples + 1)),
-                self.likelihoods[i * self.config.samples : (i + 1) * self.config.samples],
+                list(range(1, self.likelihoods[i].shape[0] + 1)), self.likelihoods[i],
             )
             plt.xlabel("Samples")
             plt.ylabel("Log-likelihoods")
@@ -569,7 +757,7 @@ class Experiment:
         plt.figure()
         plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
         plt.plot(
-            list(range(1, self.config.samples * n + 1)), self.tr_accs,
+            list(range(1, len(self.tr_accs) + 1)), self.tr_accs,
         )
         plt.xlabel("Samples")
         plt.ylabel("Train score")
@@ -580,7 +768,7 @@ class Experiment:
         plt.figure()
         plt.ticklabel_format(style="sci", axis="y", scilimits=(0, 0))
         plt.plot(
-            list(range(1, self.config.samples * n + 1)), self.te_accs,
+            list(range(1, len(self.te_accs) + 1)), self.te_accs,
         )
         plt.xlabel("Samples")
         plt.ylabel("Test score")
@@ -591,7 +779,7 @@ class Experiment:
 
         x_test = np.linspace(1, len(self.test.label), num=len(self.test.label))
         for i in range(len(self.Fx_test_l)):
-            Fx_test = self.Fx_test_l[i]
+            Fx_test = self.Fx_test_l[i].cpu().numpy()
             # Uncertainty graphs
             fx_mu = Fx_test.mean(axis=0).squeeze()
             fx_high = np.percentile(Fx_test, 99.5, axis=0).squeeze()
@@ -623,7 +811,11 @@ if __name__ == "__main__":
         # config.mcmc = True
         exp_mcmc = Experiment(config)
         exp_mcmc.init_experiment()
-        exp_mcmc.run(config.num_nets)
+
+        if config.simultaneous:
+            exp_mcmc.run_simultaneous(config.num_nets)
+        else:
+            exp_mcmc.run_sequential(config.num_nets)
     else:
         exp = Experiment(config)
         exp.init_experiment()

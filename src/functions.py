@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import torch
 
 from utils import rmse_torch
 
@@ -15,6 +16,12 @@ class Classification:
 
 
 class Regression:
+    def g_func(y, yhat):
+        return 2 * (yhat - y)
+
+    def lambda_func(y, fx, Fx):
+        return torch.sum(fx * (y - Fx), 0) / torch.sum(fx * fx, 0)
+
     def log_likelihood(model, x, y, w, tau_sq):
 
         fx = model.evaluate_proposal(x, w)
