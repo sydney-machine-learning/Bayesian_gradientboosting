@@ -33,7 +33,7 @@ mcmc_params:
   lr: 0.1                  # Learning rate
   optimizer: sgd           # "adam" or "sgd"
   samples: 10000                  # Number of samples to generate
-  burn_in: 5000                   # Burn in samples
+  burn_in: 5000                  # Burn in samples
   step_w:                         # Variance for random walk weight steps, use 0.01 for classification and 0.0025 for regression
     classification: 0.01
     regression: 0.0025            # Use 0.01 for multistep

@@ -133,10 +133,10 @@ class ptReplica(multiprocessing.Process):
                 sigma_squared, nu_1, nu_2, model_weights[i], tau_pro, self.config
             )  # takes care of the gradients
 
-            self.likelihoods[i][0], fx_train = self.exp.log_likelihood_func(
+            self.likelihoods[i][0], fx_train_list[i] = self.exp.log_likelihood_func(
                 model, x, grad_direction, model_weights[i], tau_sq=tau_pro
             )
-            _, fx_test = self.exp.log_likelihood_func(
+            _, fx_test_list[i] = self.exp.log_likelihood_func(
                 model, x_test, y_test, model_weights[i], tau_sq=tau_pro
             )
 
@@ -294,20 +294,18 @@ class ptReplica(multiprocessing.Process):
         # np.savetxt(file_name, rmse_train, fmt="%1.2f")
 
         file_name = self.path + "/predictions/acc_test_chain_" + str(self.temperature) + ".txt"
-        np.savetxt(file_name, np.array(self.te_accs), fmt="%1.2f")
+        np.savetxt(file_name, np.array(self.te_accs))
+
         file_name = self.path + "/predictions/acc_train_chain_" + str(self.temperature) + ".txt"
-        np.savetxt(file_name, np.array(self.tr_accs), fmt="%1.2f")
+        np.savetxt(file_name, np.array(self.tr_accs))
 
         file_name = self.path + "/posterior/pos_likelihood/chain_" + str(self.temperature) + ".txt"
-        np.savetxt(file_name, self.likelihoods, fmt="%1.4f")
+        np.savetxt(file_name, self.likelihoods)
 
         file_name = (
             self.path + "/posterior/accept_list/chain_" + str(self.temperature) + "_accept.txt"
         )
-        np.savetxt(file_name, [accept_ratio], fmt="%1.4f")
-
-        # file_name = self.path + "/posterior/accept_list/chain_" + str(self.temperature) + ".txt"
-        # np.savetxt(file_name, accept_list, fmt="%1.4f")
+        np.savetxt(file_name, [accept_ratio])
 
 
 class ParallelTempering:
@@ -577,7 +575,7 @@ class ParallelTempering:
         mcmc_samples = int(self.samples_chains * 0.25)
 
         likelihood_rep = np.zeros(
-            (self.config.params.num_chains, self.samples_chains - burnin + 1)
+            (self.config.params.num_chains, self.num_nets, self.samples_chains - burnin + 1,)
         )
         accept_percent = np.zeros((self.config.params.num_chains, 1))
         accept_list = np.zeros((self.config.params.num_chains, self.samples_chains))
@@ -606,8 +604,8 @@ class ParallelTempering:
                 + str(self.temperatures[i])
                 + ".txt"
             )
-            dat = np.loadtxt(file_name)
-            likelihood_rep[i, :] = dat[burnin:]
+            dat = np.loadtxt(file_name).reshape((self.num_nets, self.samples_chains + 1))
+            likelihood_rep[i, :] = dat[:, burnin:]
 
             file_name = (
                 self.path + "/predictions/acc_test_chain_" + str(self.temperatures[i]) + ".txt"

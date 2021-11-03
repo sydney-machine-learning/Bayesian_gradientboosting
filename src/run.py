@@ -18,8 +18,15 @@ from functions import Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
 from parallel_tempering import ParallelTempering
-from utils import (auc_score, classification_score, get_optim,
-                   gr_convergence_rate, init_gbnn, mse_torch, root_mse)
+from utils import (
+    auc_score,
+    classification_score,
+    get_optim,
+    gr_convergence_rate,
+    init_gbnn,
+    mse_torch,
+    root_mse,
+)
 
 with open("config.yaml", "r") as yamlfile:
     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
@@ -613,10 +620,10 @@ class Experiment:
                 sigma_squared, nu_1, nu_2, model_weights[i], tau_pro, self.config
             )  # takes care of the gradients
 
-            self.likelihoods[i][0], fx_train = self.log_likelihood_func(
+            self.likelihoods[i][0], fx_train_list[i] = self.log_likelihood_func(
                 model, x, grad_direction, model_weights[i], tau_sq=tau_pro
             )
-            _, fx_test = self.log_likelihood_func(
+            _, fx_test_list[i] = self.log_likelihood_func(
                 model, x_test, y_test, model_weights[i], tau_sq=tau_pro
             )
 

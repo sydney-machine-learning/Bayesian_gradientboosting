@@ -34,6 +34,7 @@ def root_mse(net_ensemble, data, cuda=True, out=None):
     if out is None:
         with torch.no_grad():
             out = net_ensemble.forward(x).cpu().numpy()
+
     return mean_squared_error(y, out, squared=False)
 
 
