@@ -171,10 +171,10 @@ class ptReplica(multiprocessing.Process):
 
                 if i == pt_samples and init_count == 0:
                     self.adapttemp = 1
-                    self.likelihoods[j][i], fx_train = self.exp.log_likelihood_func(
+                    self.likelihoods[j][i], fx_train_list[j] = self.exp.log_likelihood_func(
                         model, x, grad_direction, model_weights[j], tau_sq=tau_pro
                     )
-                    _, fx_test = self.exp.log_likelihood_func(
+                    _, fx_test_list[j] = self.exp.log_likelihood_func(
                         model, x_test, y_test, model_weights[j], tau_sq=tau_pro
                     )
                     init_count += 1
@@ -257,20 +257,22 @@ class ptReplica(multiprocessing.Process):
                 self.Fx_test_l[j][i] = Fx_test
 
             if (i + 1) % self.swap_interval == 0:
-                param = [model_weights, eta_list, self.likelihoods, self.temperature, i]
+                param = [model_weights, eta_list, self.likelihoods[:, i], self.temperature, i]
                 self.parameter_queue.put(param)
                 self.signal_main.set()
                 self.event.clear()
                 self.event.wait()
 
                 # Retrieve parameters
-                (
-                    model_weights,
-                    eta_list,
-                    self.likelihoods,
-                    self.temperature,
-                    i,
-                ) = self.parameter_queue.get()
+                # (
+                #     model_weights,
+                #     eta_list,
+                #     self.likelihoods,
+                #     self.temperature,
+                #     i,
+                # ) = self.parameter_queue.get()
+                (model_weights, eta_list, temp, _, _) = self.parameter_queue.get()
+                self.likelihoods[:, i] = temp
 
         self.parameter_queue.put(param)
 
@@ -520,21 +522,21 @@ class ParallelTempering:
 
             if count == self.config.params.num_chains:
                 break
-            print("Waiting")
+            # print("Waiting")
             timeout_count = 0
             for index in range(0, self.config.params.num_chains):
-                print("Waiting for chain: {}".format(index + 1))
+                # print("Waiting for chain: {}".format(index + 1))
                 flag = self.wait_chain[index].wait()
                 if flag:
-                    print("Signal from chain: {}".format(index + 1))
+                    # print("Signal from chain: {}".format(index + 1))
                     timeout_count += 1
 
             if timeout_count != self.config.params.num_chains:
                 print("Skipping the swap!")
                 continue
-            print("Event occured")
+            # print("Event occured")
             for index in range(0, self.config.params.num_chains - 1):
-                print("starting swap")
+                # print("starting swap")
                 param_1, param_2, swapped = self.swap_procedure(
                     self.parameter_queue[index], self.parameter_queue[index + 1]
                 )
@@ -555,7 +557,6 @@ class ParallelTempering:
             self.chains[index].join()
         self.chain_queue.join()
 
-        print("Compiling results")
         (acc_train, acc_test, accept, chains) = self.show_results()
 
         print("NUMBER OF SWAPS =", self.num_swap)

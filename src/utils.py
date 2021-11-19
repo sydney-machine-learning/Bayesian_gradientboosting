@@ -82,56 +82,60 @@ def init_gbnn(train):
     return probs
 
 
-def gr_convergence_rate(chains, config):
-    # Chains shape is (M, N, weight_size)
+def gr_convergence_rate(all_chains, config):
+    # Chains shape is (M, num_nets, N, weight_size)
 
-    chains = np.array(chains)
+    ret = []
+    for i in range(config.num_nets):
+        chains = all_chains[:, i, :, :]
 
-    M, N, P = chains.shape
+        M, N, P = chains.shape
 
-    B_on_n = chains.mean(axis=1).var(axis=0)
-    W = chains.var(axis=1).mean(axis=0)
+        B_on_n = chains.mean(axis=1).var(axis=0)
+        W = chains.var(axis=1).mean(axis=0)
 
-    sig2 = N / (N - 1) * W + B_on_n
-    Vhat = sig2 + B_on_n / N
-    Rhat = Vhat / W
+        sig2 = N / (N - 1) * W + B_on_n
+        Vhat = sig2 + B_on_n / N
+        Rhat = Vhat / W
 
-    # return Rhat
+        # return Rhat
 
-    si2 = chains.var(axis=1)
-    xi_bar = chains.mean(axis=1)
-    xi2_bar = chains.mean(axis=1) ** 2
-    var_si2 = chains.var(axis=1).var(axis=0)
-    allmean = chains.mean(axis=1).mean(axis=0)
-    cov_term1 = np.array([np.cov(si2[:, i], xi2_bar[:, i])[0, 1] for i in range(P)])
-    cov_term2 = np.array(
-        [-2 * allmean[i] * (np.cov(si2[:, i], xi_bar[:, i])[0, 1]) for i in range(P)]
-    )
-    var_Vhat = (
-        ((N - 1) / N) ** 2 * 1.0 / M * var_si2
-        + ((M + 1) / M) ** 2 * 2.0 / (M - 1) * B_on_n ** 2
-        + 2.0 * (M + 1) * (N - 1) / (M * N ** 2) * N / M * (cov_term1 + cov_term2)
-    )
-    df = 2 * Vhat ** 2 / var_Vhat
+        si2 = chains.var(axis=1)
+        xi_bar = chains.mean(axis=1)
+        xi2_bar = chains.mean(axis=1) ** 2
+        var_si2 = chains.var(axis=1).var(axis=0)
+        allmean = chains.mean(axis=1).mean(axis=0)
+        cov_term1 = np.array([np.cov(si2[:, i], xi2_bar[:, i])[0, 1] for i in range(P)])
+        cov_term2 = np.array(
+            [-2 * allmean[i] * (np.cov(si2[:, i], xi_bar[:, i])[0, 1]) for i in range(P)]
+        )
+        var_Vhat = (
+            ((N - 1) / N) ** 2 * 1.0 / M * var_si2
+            + ((M + 1) / M) ** 2 * 2.0 / (M - 1) * B_on_n ** 2
+            + 2.0 * (M + 1) * (N - 1) / (M * N ** 2) * N / M * (cov_term1 + cov_term2)
+        )
+        df = 2 * Vhat ** 2 / var_Vhat
 
-    Rhat *= df / (df - 2)
+        Rhat *= df / (df - 2)
 
-    return Rhat
+        # ret.append(Rhat)
 
-    # variances = []  # (M, weight_size)
-    # means = []  # (M, weight_size)
-    # for chain in chains:
-    #     variances.append(np.var(chain, axis=0))
-    #     means.append(np.mean(chain, axis=0))
+        variances = []  # (M, weight_size)
+        means = []  # (M, weight_size)
+        for chain in chains:
+            variances.append(np.var(chain, axis=0))
+            means.append(np.mean(chain, axis=0))
 
-    # W = np.mean(variances, axis=0)
+        W = np.mean(variances, axis=0)
 
-    # g_mean = np.mean(means, axis=0)
+        g_mean = np.mean(means, axis=0)
 
-    # B = N / (M - 1) * np.sum((means - g_mean) ** 2, axis=0)
+        B = N / (M - 1) * np.sum((means - g_mean) ** 2, axis=0)
 
-    # var_hat = (1 - 1 / N) * W + 1 / N * B
+        var_hat = (1 - 1 / N) * W + 1 / N * B
 
-    # scale_reduction = np.sqrt(var_hat / W)
+        scale_reduction = np.sqrt(var_hat / W)
 
-    # return scale_reduction
+        ret.append(scale_reduction)
+
+    return ret

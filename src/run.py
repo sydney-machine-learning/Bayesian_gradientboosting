@@ -14,7 +14,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.autograd import grad
 
 from data.data import LibCSVData, LibTXTData
-from functions import Regression
+from functions import Classification, Regression
 from models.ensemble_net import EnsembleNet
 from models.mlp import MLP_1HL
 from parallel_tempering import ParallelTempering
@@ -217,12 +217,12 @@ class Experiment:
             t0 = time.time()
 
             if config.mcmc:
-                if config.parallel_tempering:
-                    pt = ParallelTempering(self, self.config, level)
-                    pt.init_directories()
-                    pt.init_chains()
-                    tr_score_l, te_score_l, accepted, chains = pt.run_chains()
-                elif config.simultaneous:
+                # if config.parallel_tempering:
+                #     pt = ParallelTempering(self, self.config, level)
+                #     pt.init_directories()
+                #     pt.init_chains()
+                #     tr_score_l, te_score_l, accepted, chains = pt.run_chains()
+                if config.simultaneous:
                     tr_score_l, te_score_l, accepted, chains = self.run_simultaneous(level)
                 else:
                     tr_score_l, te_score_l, accepted, chains = self.run_sequential(level)
@@ -275,6 +275,7 @@ class Experiment:
         #     loss.backward()
         #     optimizer.step()
 
+        optimizer.zero_grad()
         out = model(x)
         loss = self.loss_func(out, y)
 
@@ -329,6 +330,7 @@ class Experiment:
             step_w = self.config.params.step_w["regression"]
 
         sigma_squared = step_w * 10
+        # sigma_squared = 1
         nu_1 = 0
         nu_2 = 0
         # step_eta = self.config.step_eta
@@ -339,6 +341,7 @@ class Experiment:
 
         pred_train = model.evaluate_proposal(x, w)
         eta = np.log(np.var((pred_train - grad_direction).cpu().numpy()))
+        # eta = 0
         tau_pro = np.exp(eta)
 
         prior_current = self.prior_func(
@@ -437,7 +440,7 @@ class Experiment:
             acc_tr, _ = self.compute_accuracy(fx_train, Fx_train, self.train)
             acc_te, pred_te = self.compute_accuracy(fx_test, Fx_test, self.test)
             # if i >= self.config.burn_in:
-            Fx_test_samples[i] = pred_te.cpu().numpy()
+            Fx_test_samples[i] = pred_te.cpu()
 
             likelihoods[i] = log_lik
 
@@ -501,7 +504,7 @@ class Experiment:
         final_te_score = 0
         accepted = 0
 
-        chains = None
+        chains = []
         for stage in range(num_nets):
 
             # self.config.step_w["classification"] *= 0.5
@@ -514,8 +517,9 @@ class Experiment:
             log_likelihood = None
 
             if config.mcmc:
-                temp, log_likelihood, chains = self.train_mcmc(self.net_ensemble, model)
+                temp, log_likelihood, chain_temp = self.train_mcmc(self.net_ensemble, model)
                 accepted += temp
+                chains.append(chain_temp)
             else:
                 self.train_backprop(self.net_ensemble, model)
 
@@ -628,7 +632,9 @@ class Experiment:
             )
 
         accepted = 0
-        chains = np.zeros((self.config.params.samples - self.config.params.burn_in, w_size))
+        chains = np.zeros(
+            (num_nets, self.config.params.samples - self.config.params.burn_in, w_size)
+        )
         for i in range(self.config.params.samples):
 
             self.net_ensemble.reset()
@@ -710,7 +716,7 @@ class Experiment:
                     self.likelihoods[j][i + 1] = self.likelihoods[j][i]
 
                 if i >= self.config.params.burn_in:
-                    chains[i - self.config.params.burn_in] = w
+                    chains[j][i - self.config.params.burn_in] = w
 
                 acc_tr, _ = self.compute_accuracy(fx_train_list[j], Fx_train, self.train)
                 acc_te, pred_te = self.compute_accuracy(fx_test_list[j], Fx_test, self.test)
@@ -806,10 +812,54 @@ class Experiment:
             plt.ylabel("Prediction")
             plt.savefig(path + f"uncertainty_{i}.png")
 
+    def plot_chains(self, all_chains):
+        # Chains shape is (M, num_nets, N, weight_size)
+
+        converge_rates = gr_convergence_rate(all_chains, self.config)
+
+        print(converge_rates)
+
+        converged = np.argmin(converge_rates, axis=1)
+
+        colors = ["red", "blue", "green", "pink", "grey"]
+
+        path = f"plots/{self.config.data}/"
+        Path(path).mkdir(parents=True, exist_ok=True)
+        for i in range(self.config.num_nets):
+            weights = all_chains[:, i, :, :]
+
+            x = np.linspace(0, weights.shape[1], num=weights.shape[1])
+
+            plt.figure()
+            # plt.legend(loc="upper right")
+            for j in range(weights.shape[0]):
+                plt.plot(
+                    x, weights[j, :, converged[i]], color=colors[j],
+                )
+
+            plt.ylabel("Parameter Values")
+            plt.xlabel("Samples")
+            plt.ylim((-0.6, 0.6))
+            # plt.yticks(fontsize=13)
+            # plt.xticks(fontsize=13)
+            plt.savefig(path + f"/weights_samples_{i}.png")
+            plt.clf()
+
+            plt.figure()
+            # plt.legend(loc="upper right")
+            plt.hist(weights[0, :, converged[i]], bins=20, color="blue", alpha=0.7)
+
+            plt.ylabel("Frequency")
+            plt.xlabel("Parameter Values")
+            # plt.yticks(fontsize=13)
+            # plt.xticks(fontsize=13)
+            plt.savefig(path + f"/hist_weights_{i}.png")
+            plt.clf()
+
 
 if __name__ == "__main__":
 
-    if config.plot_graphs:
+    if config.plot_graphs or config.plot_chains:
 
         # config.mcmc = False
         # exp_backprop = Experiment(config).init_experiment()
@@ -819,10 +869,17 @@ if __name__ == "__main__":
         exp_mcmc = Experiment(config)
         exp_mcmc.init_experiment()
 
-        if config.simultaneous:
-            exp_mcmc.run_simultaneous(config.num_nets)
-        else:
-            exp_mcmc.run_sequential(config.num_nets)
+        all_chains = []
+        for _ in range(config.params.exps):
+            if config.simultaneous:
+                _, _, _, chains = exp_mcmc.run_simultaneous(config.num_nets)
+            else:
+                _, _, _, chains = exp_mcmc.run_sequential(config.num_nets)
+
+            all_chains.append(chains)
+
+        if config.plot_chains:
+            exp_mcmc.plot_chains(np.array(all_chains))
     else:
         exp = Experiment(config)
         exp.init_experiment()

@@ -9,20 +9,21 @@
 # - rossler
 # - henon
 # - lazer
-data: "sunspot"
+data: "pendigit"
 num_nets: 5               # Number of weak learners to train
 cuda: true                # Use GPU
 
 # Options for MCMC sampling
 mcmc: true
-simultaneous: true
-parallel_tempering: true
+simultaneous: false
+# parallel_tempering: false
 
 # Train on multistep version on the problem
 # ( Only applies for timeseries regression problems )
 multistep: false
 
 plot_graphs: false              # Plot diagnostic graphs for MCMC
+plot_chains: false              # Plot trace and hist graphs for MCMC
 
 backprop_params:
   lr: 0.01                  # Learning rate
@@ -30,6 +31,7 @@ backprop_params:
   optimizer: adam           # "adam" or "sgd"
 
 mcmc_params:
+  exps: 5                   # Chains to run for GR statistic
   lr: 0.1                  # Learning rate
   optimizer: sgd           # "adam" or "sgd"
   samples: 10000                  # Number of samples to generate
@@ -39,11 +41,11 @@ mcmc_params:
     regression: 0.0025            # Use 0.01 for multistep
   #step_eta: 0.0025               # Use 0.0025?
   langevin_gradients: true        # Use langevin gradients
-  lg_rate: 0.2                    # Rate for langevin gradients
+  lg_rate: 0.4                    # Rate for langevin gradients
 
   # Parallel tempering parameters
-  num_chains: 10
-  swap_ratio: 0.02
-  swap_interval: 20               # int(swap_ratio*num_samples/num_chains)
-  maxtemp: 10
-  geometric: true
+  #num_chains: 6
+  #swap_ratio: 0.02
+  #swap_interval: 5               # int(swap_ratio*num_samples/num_chains)
+  #maxtemp: 2
+  #geometric: true
