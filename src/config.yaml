@@ -9,8 +9,8 @@
 # - rossler
 # - henon
 # - lazer
-data: "pendigit"
-num_nets: 5               # Number of weak learners to train
+data: "ionosphere"
+num_nets: 3               # Number of weak learners to train
 cuda: true                # Use GPU
 
 # Options for MCMC sampling
@@ -22,16 +22,16 @@ simultaneous: false
 # ( Only applies for timeseries regression problems )
 multistep: false
 
-plot_graphs: false              # Plot diagnostic graphs for MCMC
+plot_graphs: true              # Plot diagnostic graphs for MCMC
 plot_chains: false              # Plot trace and hist graphs for MCMC
 
 backprop_params:
   lr: 0.01                  # Learning rate
-  exps: 30                   # Number of experiments to run 
+  exps: 1                   # Number of experiments to run 
   optimizer: adam           # "adam" or "sgd"
 
 mcmc_params:
-  exps: 5                   # Chains to run for GR statistic
+  exps: 2                   # Chains to run for GR statistic
   lr: 0.1                  # Learning rate
   optimizer: sgd           # "adam" or "sgd"
   samples: 10000                  # Number of samples to generate

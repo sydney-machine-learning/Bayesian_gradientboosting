@@ -1,8 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 from scipy.special import softmax
-from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score
+from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score, roc_curve, auc
+import scikitplot as skplt
 from torch.optim import SGD, Adam
 
 
@@ -71,6 +73,31 @@ def auc_score(net_ensemble, data, cuda=True, out=None):
 
     return score
 
+def plot_roc_auc_curve(net_ensemble, n , data, cuda=True, out=None):
+
+    x, y = data.feat, data.label
+    if cuda:
+        x = torch.as_tensor(x, dtype=torch.float32).cuda()
+
+    if out is None:
+        with torch.no_grad():
+            out = net_ensemble.forward_n(x, n).cpu().numpy()
+
+    #out = softmax(out, axis=-1)
+    out = out[:,-1]
+    y = np.argmax(y, axis=-1)
+ 
+    fpr, tpr, threshold = roc_curve(y, out)
+    roc_auc = auc(fpr, tpr)
+
+    plt.figure()
+    plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % roc_auc)
+    plt.legend(loc = 'lower right')
+    plt.plot([0, 1.1], [0, 1.1],'r--')
+    plt.xlim([0, 1.1])
+    plt.ylim([0, 1.1])
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
 
 def init_gbnn(train):
     data = torch.as_tensor(train.label, dtype=torch.float32).cuda()

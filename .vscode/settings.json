@@ -6,5 +6,6 @@
         "./src",
         "./src",
         "./src"
-    ]
+    ],
+    "python.analysis.typeCheckingMode": "basic"
 }

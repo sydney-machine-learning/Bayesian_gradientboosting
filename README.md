@@ -19,6 +19,9 @@ numpy=1.19.5
 pandas=1.1.5
 python=3.6.10
 pytorch=1.9.0
+matplotlib
+scikit-learn
+pyyaml
 ```
 
 Install the packages in a conda environment before running.
@@ -41,7 +44,7 @@ params:
 
   lr: 0.01                  # Learning rate
   num_nets: 5               # Number of weak learners to train
-  exps: 30                  # Number of experiments to run 
+  exps: 30                  # Number of experiments to run
   cuda: true                # Use GPU
   optimizer: adam           # "adam" or "sgd"
 
@@ -65,5 +68,5 @@ To run the code, simply navigate into the `src/` folder and run the relevant pyt
 ```bash
 cd src
 
-python run_sequential.py
+python run.py
 ```

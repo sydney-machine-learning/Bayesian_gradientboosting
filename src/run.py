@@ -4,6 +4,8 @@ import time
 from multiprocessing import Value
 from pathlib import Path
 
+import sklearn.metrics as metrics
+import scikitplot as skplt
 import matplotlib
 import numpy as np
 import torch
@@ -26,6 +28,7 @@ from utils import (
     init_gbnn,
     mse_torch,
     root_mse,
+    plot_roc_auc_curve,
 )
 
 with open("config.yaml", "r") as yamlfile:
@@ -510,6 +513,8 @@ class Experiment:
             # self.config.step_w["classification"] *= 0.5
             # self.config.step_w["regression"] *= 0.5
 
+            print(stage)
+
             model = model_type.get_model(config)
             if config.cuda:
                 model.cuda()
@@ -788,29 +793,31 @@ class Experiment:
         plt.savefig(path + f"test_scores.png")
 
         if self.config.classification:
-            return
+            for i in range(len(self.Fx_test_l)):
+                plot_roc_auc_curve(self.net_ensemble, i + 1, self.test)
+                plt.savefig(path + f"roc_auc_{i}.png")
+        else:
+            x_test = np.linspace(1, len(self.test.label), num=len(self.test.label))
+            for i in range(len(self.Fx_test_l)):
+                Fx_test = self.Fx_test_l[i].cpu().numpy()
+                # Uncertainty graphs
+                fx_mu = Fx_test.mean(axis=0).squeeze()
+                fx_high = np.percentile(Fx_test, 99.5, axis=0).squeeze()
+                fx_low = np.percentile(Fx_test, 0.5, axis=0).squeeze()
 
-        x_test = np.linspace(1, len(self.test.label), num=len(self.test.label))
-        for i in range(len(self.Fx_test_l)):
-            Fx_test = self.Fx_test_l[i].cpu().numpy()
-            # Uncertainty graphs
-            fx_mu = Fx_test.mean(axis=0).squeeze()
-            fx_high = np.percentile(Fx_test, 99.5, axis=0).squeeze()
-            fx_low = np.percentile(Fx_test, 0.5, axis=0).squeeze()
+                plt.figure()
+                # plt.plot(x_test, fx_low, "w", label="pred. (2.5 percen.)")
+                # plt.plot(x_test, fx_high, "w", label="pred. (97.5 percen.)")
+                plt.fill_between(
+                    x_test, fx_low, fx_high, facecolor="b", alpha=0.5, label="pred. (99 percen.)"
+                )
+                plt.plot(x_test, self.test.label, "r", label="actual", linewidth=0.5)
+                plt.plot(x_test, fx_mu, "b", label="pred. (mean)", linewidth=0.5)
 
-            plt.figure()
-            # plt.plot(x_test, fx_low, "w", label="pred. (2.5 percen.)")
-            # plt.plot(x_test, fx_high, "w", label="pred. (97.5 percen.)")
-            plt.fill_between(
-                x_test, fx_low, fx_high, facecolor="b", alpha=0.5, label="pred. (99 percen.)"
-            )
-            plt.plot(x_test, self.test.label, "r", label="actual", linewidth=0.5)
-            plt.plot(x_test, fx_mu, "b", label="pred. (mean)", linewidth=0.5)
-
-            plt.legend(loc="upper right")
-            plt.xlabel("Time")
-            plt.ylabel("Prediction")
-            plt.savefig(path + f"uncertainty_{i}.png")
+                plt.legend(loc="upper right")
+                plt.xlabel("Time")
+                plt.ylabel("Prediction")
+                plt.savefig(path + f"uncertainty_{i}.png")
 
     def plot_chains(self, all_chains):
         # Chains shape is (M, num_nets, N, weight_size)
@@ -825,6 +832,10 @@ class Experiment:
 
         path = f"plots/{self.config.data}/"
         Path(path).mkdir(parents=True, exist_ok=True)
+
+        # Font size
+        matplotlib.rcParams.update({"font.size": 14})
+
         for i in range(self.config.num_nets):
             weights = all_chains[:, i, :, :]
 

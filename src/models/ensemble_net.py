@@ -63,3 +63,18 @@ class EnsembleNet(object):
                 prediction += g * m(x)
 
         return prediction
+
+    def forward_n(self, x, n):
+        # print(x)
+        if x.dim() > 1:
+            prediction = np.tile(self.c0, (x.shape[0], 1))
+        else:
+            prediction = self.c0
+
+        # print(self.c0)
+        prediction = torch.as_tensor(prediction, dtype=torch.float32).cuda()
+        with torch.no_grad():
+            for m, g in zip(self.models[:n], self.gammas[:n]):
+                prediction += g * m(x)
+
+        return prediction
